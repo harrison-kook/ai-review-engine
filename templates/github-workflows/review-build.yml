@@ -1,0 +1,61 @@
+# AI 리뷰 — build 단계 (파일럿 레포에 .github/workflows/review-build.yml 로 복사)
+#
+# fork PR을 포함한 모든 PR에서 트리거된다. 시크릿을 전혀 쓰지 않고, 대상 레포의 코드
+# (gradlew build/check)를 여기서 실행한다 — 그래서 fork PR이어도 안전하다 (설계서 1.3).
+# 결과(Findings JSON)만 artifact로 남기고, 실제 LLM 리뷰/PR 코멘트는 review-report.yml이
+# workflow_run으로 이어받는다 (설계서 1.3 "fork PR에는 시크릿이 노출되지 않도록 워크플로 트리거 분리").
+
+name: AI Review - Build
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 사전에 ghcr.io 등에 배포해둔 ai-review-engine 샌드박스 이미지를 쓰는 것을 권장한다.
+      # (엔진 소스는 이 레포가 아니라 별도 ai-review-engine 레포에 있다.)
+      - name: Pull sandbox image
+        run: docker pull ghcr.io/our-org/ai-review-engine:latest
+
+      # 1) 의존성 다운로드 — 네트워크 허용, 시크릿 없음
+      - name: Warm Gradle cache
+        run: |
+          mkdir -p ~/.gradle
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "$HOME/.gradle:/root/.gradle" \
+            ghcr.io/our-org/ai-review-engine:latest \
+            --phase=build --repo=/workspace \
+            --findings=/workspace/build/review-findings.json || true
+
+      # 2) 실제 빌드/린트 — 네트워크 차단, 시크릿 없음 (핵심: 신뢰할 수 없는 코드가 도는 유일한 단계)
+      - name: Build & lint (network isolated)
+        run: |
+          docker run --rm --network none \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "$HOME/.gradle:/root/.gradle" \
+            ghcr.io/our-org/ai-review-engine:latest \
+            --phase=build --repo=/workspace \
+            --findings=/workspace/build/review-findings.json
+
+      - name: Save PR metadata for report workflow
+        run: |
+          mkdir -p pr-meta
+          echo "${{ github.event.pull_request.number }}" > pr-meta/pr_number.txt
+          echo "${{ github.event.pull_request.head.sha }}" > pr-meta/head_sha.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-findings
+          path: |
+            build/review-findings.json
+            pr-meta/
+          retention-days: 1

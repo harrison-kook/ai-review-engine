@@ -1,0 +1,13 @@
+# 파일럿 레포 루트에 .review.yml 로 복사해서 쓴다. (schema/review-config.schema.json 참고)
+rulepack: our-org/review-rulepack@v0.1.0
+profiles: [common, java-spring]
+mode: diff
+include: ["src/main/**"]
+exclude: ["**/generated/**", "**/*Dto.java"]
+overrides:
+  disable: []
+  # JPA-003: { severity: MEDIUM }
+limits:
+  max_diff_lines: 1500
+gate:
+  fail_on: HIGH   # 파일럿 기간엔 주석 처리하고 경고만 받는 것도 고려 (설계서 13장 미결 사항)

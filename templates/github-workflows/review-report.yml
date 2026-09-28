@@ -1,0 +1,70 @@
+# AI 리뷰 — report 단계 (파일럿 레포에 .github/workflows/review-report.yml 로 복사)
+#
+# review-build.yml이 끝난 뒤 workflow_run으로 트리거된다. base 레포 컨텍스트에서 돌기 때문에
+# 시크릿(ANTHROPIC_API_KEY, GITHUB_TOKEN)을 안전하게 쓸 수 있다. 여기서 PR의 실제 코드를
+# checkout 하지만, 절대 실행하지 않는다 — LLM은 Read/Grep/Glob으로만 파일을 읽는다
+# (review-rulepack의 agents/reviewer.md tools 제한과 대응).
+
+name: AI Review - Report
+
+on:
+  workflow_run:
+    workflows: ["AI Review - Build"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: review-findings
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read PR metadata
+        id: pr
+        run: |
+          echo "number=$(cat pr-meta/pr_number.txt)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(cat pr-meta/head_sha.txt)" >> "$GITHUB_OUTPUT"
+
+      # PR 헤드 SHA를 명시적으로 지정해서 checkout 한다 (base ref가 아니라 실제 리뷰 대상).
+      # 이 코드는 이후 어떤 스텝에서도 빌드/실행하지 않는다 — LLM이 파일만 읽는다.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: our-org/review-rulepack
+          ref: v0.1.0
+          path: rulepack
+
+      - name: Pull sandbox image
+        run: docker pull ghcr.io/our-org/ai-review-engine:latest
+
+      - name: Move findings into place
+        run: mkdir -p build && mv review-findings.json build/review-findings.json 2>/dev/null || true
+
+      - name: LLM review + PR comment
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/rulepack:/rulepack:ro" \
+            -e ANTHROPIC_API_KEY \
+            -e GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e PR_NUMBER="${{ steps.pr.outputs.number }}" \
+            -e PR_HEAD_SHA="${{ steps.pr.outputs.sha }}" \
+            ghcr.io/our-org/ai-review-engine:latest \
+            --phase=report --repo=/workspace --rulepack=/rulepack \
+            --config=/workspace/.review.yml \
+            --findings=/workspace/build/review-findings.json
