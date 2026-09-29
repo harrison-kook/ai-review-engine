@@ -82,3 +82,18 @@ PR)에서는 반드시 build/report를 나눠서 실행한다.
 - Checkstyle/PMD/SpotBugs는 대상 레포의 `build.gradle`에 이미 플러그인이 설정되어 있어야 결과가
   나온다 (`GradleSpringStackAdapter.lint()`가 `gradlew check` 실행 후 표준 리포트 경로가 있을
   때만 파싱). 이미지 자체는 아무 정적분석 도구도 강제로 설치하지 않는다.
+- 커버리지 게이트(`gate.min_coverage_delta`)를 쓰려면 대상 레포의 `build.gradle`에 `jacoco`
+  플러그인뿐 아니라 **XML 리포트를 명시적으로 켜야 한다** — Gradle jacoco 플러그인은 기본값이
+  HTML만 생성이고 XML은 꺼져 있다:
+  ```gradle
+  plugins { id 'jacoco' }
+  tasks.named('jacocoTestReport') {
+      reports { xml.required = true }
+  }
+  ```
+  이게 없으면 `jacocoTestReport.xml`이 안 생겨서 커버리지가 항상 0%로 잡힌다(엔진은 이 경우
+  `CoverageReport.EMPTY`로 조용히 폴백한다 — 에러를 내지 않으니 설정을 빼먹었는지 직접 확인해야
+  한다).
+- 뮤테이션 게이트(`gate.min_mutation_score`)를 쓰려면 대상 레포에 PIT gradle 플러그인
+  (`info.solidsoft.gradle.pitest` 등)이 설정되어 있어야 한다. PIT은 뮤턴트마다 별도 JVM을 띄워
+  느리다 — 이 게이트를 설정했을 때만 `pitest` 태스크를 실행한다.
