@@ -24,8 +24,15 @@ public class GradleWrapperRunner {
     }
 
     public ProcessResult run(Path repoRoot, String... gradleArgs) {
-        String wrapper = System.getProperty("os.name", "").toLowerCase().contains("win") ? "gradlew.bat" : "gradlew";
+        boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
+        String wrapper = windows ? "gradlew.bat" : "gradlew";
         Path wrapperPath = repoRoot.resolve(wrapper);
+
+        // 대상 레포가 Windows에서 커밋됐거나 core.filemode=false로 관리된 경우 gradlew의
+        // 실행 비트가 빠진 채로 체크아웃될 수 있다 (샌드박스는 항상 Linux 컨테이너).
+        if (!windows) {
+            wrapperPath.toFile().setExecutable(true);
+        }
 
         List<String> command = new ArrayList<>();
         command.add(wrapperPath.toString());
