@@ -39,8 +39,12 @@ public class GradleWrapperRunner {
         command.add("--console=plain");
         // 샌드박스는 매 phase마다 새 컨테이너로 뜨는 1회성 실행이라 데몬 재사용 이점이 없고,
         // 컨테이너 종료 시 데몬이 완전히 죽지 않은 채로 남아 다음 컨테이너의 ~/.gradle 캐시
-        // 잠금(journal-1.lock)과 충돌하는 문제가 있어 항상 끈다.
+        // 잠금(journal-1.lock)과 충돌하는 문제가 있어 항상 끈다. --no-daemon만으로는 파일
+        // 시스템 워칭(VFS)의 access-time journal이 여전히 컨테이너 간에 잠금 경합을 일으켜서
+        // --no-watch-fs도 함께 끈다 (동일 ~/.gradle을 공유하는 연속된 컨테이너 실행에서 실제로
+        // "Timeout waiting to lock journal cache"로 재현됨).
         command.add("--no-daemon");
+        command.add("--no-watch-fs");
         command.addAll(List.of(gradleArgs));
 
         ProcessOutcome outcome = ProcessExecutor.run(repoRoot, timeout, command);
