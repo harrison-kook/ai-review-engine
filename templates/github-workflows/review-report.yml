@@ -75,6 +75,7 @@ jobs:
       # 한 화면에서 보이고 브랜치/PR 넘어 히스토리가 남는다 (설계서 10장).
       - name: Upload SARIF to Code Scanning
         if: always()
+        continue-on-error: true  # private 레포는 GitHub Advanced Security 없이는 Code Scanning이 막혀 있다 (플랜 제약, 워크플로 버그 아님)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: build/review-report.sarif
