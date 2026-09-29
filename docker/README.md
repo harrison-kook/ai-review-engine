@@ -59,6 +59,8 @@ docker run --rm \
 - 이 단계는 `claude -p "/review"`를 호출한다 (`agents/reviewer.md`의 `tools: Read, Grep, Glob`
   제한이 `--allowedTools`로 그대로 전달된다) — 대상 레포 코드를 실행하지 않고 파일만 읽는다.
 - `GITHUB_*` 환경변수가 없으면(로컬 실행 등) PR 코멘트를 건너뛰고 로그만 남긴다.
+- 호출 모델은 기본값이 `sonnet`이다 (비용 민감 경로라 opus보다 저렴한 모델을 기본으로 쓴다).
+  `-e REVIEW_LLM_MODEL=opus`처럼 컨테이너에 환경변수를 넘기면 바꿀 수 있다.
 
 ### 로컬 개발 (샌드박스 분리 없이 한 번에)
 
