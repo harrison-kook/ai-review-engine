@@ -2,9 +2,13 @@ package com.tororang.review.core.pipeline;
 
 import com.tororang.review.core.config.ReviewConfig;
 import com.tororang.review.core.config.ReviewConfigLoader;
+import com.tororang.review.core.llm.GenTestStatus;
+import com.tororang.review.core.llm.GeneratedTestCase;
 import com.tororang.review.core.llm.LlmClient;
 import com.tororang.review.core.llm.ReviewRequest;
 import com.tororang.review.core.llm.ReviewResult;
+import com.tororang.review.core.llm.TestGenRequest;
+import com.tororang.review.core.llm.TestGenResult;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.FindingsFilter;
 import com.tororang.review.core.renderer.ReviewReport;
@@ -13,7 +17,11 @@ import com.tororang.review.core.rule.RuleMerger;
 import com.tororang.review.core.rule.RulepackInjector;
 import com.tororang.review.core.stack.StackAdapter;
 import com.tororang.review.core.stack.StepResult;
+import com.tororang.review.core.stack.TestCaseResult;
+import com.tororang.review.core.stack.TestResult;
 import com.tororang.review.core.stack.Workspace;
+import com.tororang.review.core.testcase.TestCaseCatalog;
+import com.tororang.review.core.testcase.TestCaseDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -21,6 +29,9 @@ import org.springframework.stereotype.Component;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 설계서 3장 파이프라인을 두 단계로 나눈다 (설계서 1.3의 샌드박스/시크릿 분리 원칙):
@@ -34,9 +45,15 @@ import java.util.List;
  * 필요하지만, 대상 레포의 코드를 실행하지 않고 파일을 읽기만 한다(agents/reviewer.md의
  * Read/Grep/Glob 전용 도구 제한과 대응).
  *
- * <p>{@link #run}은 두 단계를 한 프로세스에서 순차 실행한다 — 로컬 개발/CLI 즉석 실행처럼
- * 샌드박스 격리가 필요 없는 경우를 위한 편의 메서드다. CI에서는 두 단계를 별도 컨테이너
- * 실행으로 나눠 호출해야 한다 (docker/README.md 참고).
+ * <p>테스트 생성/실행도 같은 원칙으로 나뉜다: {@link #runGenTestPhase}(시크릿 있음, 코드
+ * 실행 없음 — tester가 테스트 파일만 Write)와 {@link #runTestRunPhase}(시크릿 없음, 대상
+ * 레포 코드를 실제로 컴파일·실행). 후자가 genTestPath의 매핑과 실제 JUnit 결과를 TC-ID
+ * 단위로 대조해서 {@link TestCaseReport} 목록(testCaseReportPath)을 만든다.
+ *
+ * <p>{@link #run}은 네 단계(build → gentest → testrun → report)를 한 프로세스에서 순차
+ * 실행한다 — 로컬 개발/CLI 즉석 실행처럼 샌드박스 격리가 필요 없는 경우를 위한 편의
+ * 메서드다. CI에서는 단계별로 별도 컨테이너 실행으로 나눠 호출해야 한다
+ * (docker/README.md 참고).
  */
 @Component
 public class ReviewPipeline {
@@ -48,6 +65,7 @@ public class ReviewPipeline {
     private final ReviewConfigLoader configLoader = new ReviewConfigLoader();
     private final RuleMerger ruleMerger = new RuleMerger();
     private final RulepackInjector rulepackInjector = new RulepackInjector();
+    private final TestCaseCatalog testCaseCatalog = new TestCaseCatalog();
 
     public ReviewPipeline(List<StackAdapter> stackAdapters, LlmClient llmClient) {
         this.stackAdapters = stackAdapters;
@@ -89,10 +107,87 @@ public class ReviewPipeline {
         return new ReviewReport(allFindings, config);
     }
 
-    /** 편의 메서드: 로컬 CLI 실행처럼 샌드박스 분리가 필요 없을 때 두 단계를 한 번에 돌린다. */
-    public ReviewReport run(ReviewCommand command) {
+    /**
+     * tester 에이전트(agents/tester.md)를 호출해 testcases/*.md 시나리오에 대한 테스트 코드를
+     * 작성하게 한다. 시크릿/네트워크가 필요하지만 대상 레포 코드를 실행하지는 않는다(Write만
+     * 허용, Bash 없음). 매핑 결과만 genTestPath에 저장한다 — 실행은 {@link #runTestRunPhase}가
+     * 별도 프로세스에서 한다.
+     */
+    public void runGenTestPhase(ReviewCommand command) {
+        ReviewConfig config = configLoader.load(command.configPath());
+        rulepackInjector.inject(command.rulepackDir(), command.repoRoot(), config.profiles());
+
+        TestGenResult result = llmClient.generateTests(new TestGenRequest(command.repoRoot()));
+        log.info("tester가 다룬 TC 수: {}", result.generatedTests().size());
+
+        JsonListIO.write(command.genTestPath(), result.generatedTests());
+    }
+
+    /**
+     * tester가 작성한 테스트를 포함해 전체 테스트를 실행하고(StackAdapter.test, 결정적), TC-ID별
+     * 최종 판정을 만든다. build 단계와 같은 이유로 시크릿 없이 네트워크 차단 상태로 돌아야 한다.
+     */
+    public List<TestCaseReport> runTestRunPhase(ReviewCommand command) {
+        ReviewConfig config = configLoader.load(command.configPath());
+        List<TestCaseDefinition> catalog = testCaseCatalog.scanProfiles(command.rulepackDir(), config.profiles());
+        List<GeneratedTestCase> mappings = JsonListIO.read(command.genTestPath(), GeneratedTestCase.class);
+
+        StackAdapter stackAdapter = detectStackAdapter(command.repoRoot());
+        TestResult testResult = stackAdapter.test(new Workspace(command.repoRoot()));
+        log.info("실행된 테스트: {}건 (실패 {}건)", testResult.totalTests(), testResult.failedTests());
+
+        List<TestCaseReport> reports = correlate(catalog, mappings, testResult.cases());
+        JsonListIO.write(command.testCaseReportPath(), reports);
+        return reports;
+    }
+
+    private List<TestCaseReport> correlate(
+            List<TestCaseDefinition> catalog,
+            List<GeneratedTestCase> mappings,
+            List<TestCaseResult> executed
+    ) {
+        Map<String, GeneratedTestCase> mappingByTcId = mappings.stream()
+                .collect(Collectors.toMap(GeneratedTestCase::tcId, m -> m, (a, b) -> a));
+
+        List<TestCaseReport> reports = new ArrayList<>();
+        for (TestCaseDefinition def : catalog) {
+            GeneratedTestCase mapping = mappingByTcId.get(def.tcId());
+            if (mapping == null || mapping.status() == GenTestStatus.SKIPPED) {
+                String reason = mapping != null ? mapping.reason() : "tester가 이 TC를 다루지 않음";
+                reports.add(new TestCaseReport(def.tcId(), def.title(), TestCaseReport.Status.NOT_GENERATED,
+                        null, null, reason));
+                continue;
+            }
+
+            Optional<TestCaseResult> matched = executed.stream()
+                    .filter(r -> r.className().equals(mapping.className()) && r.methodName().equals(mapping.methodName()))
+                    .findFirst();
+
+            if (matched.isPresent()) {
+                TestCaseResult result = matched.get();
+                reports.add(new TestCaseReport(def.tcId(), def.title(),
+                        result.passed() ? TestCaseReport.Status.PASSED : TestCaseReport.Status.FAILED,
+                        mapping.className(), mapping.methodName(), result.failureMessage()));
+            } else {
+                reports.add(new TestCaseReport(def.tcId(), def.title(), TestCaseReport.Status.FAILED,
+                        mapping.className(), mapping.methodName(),
+                        "테스트 실행 결과에서 찾을 수 없음 (컴파일 실패 등)"));
+            }
+        }
+        return reports;
+    }
+
+    /**
+     * 편의 메서드: 로컬 CLI 실행처럼 샌드박스 분리가 필요 없을 때 네 단계를 한 프로세스에서
+     * 순차 실행한다. CI에서는 build/gentest/testrun/report를 별도 컨테이너 실행으로 나눠야 한다
+     * (docker/README.md 참고).
+     */
+    public PipelineResult run(ReviewCommand command) {
         runBuildPhase(command);
-        return runReportPhase(command);
+        runGenTestPhase(command);
+        List<TestCaseReport> testCaseReports = runTestRunPhase(command);
+        ReviewReport reviewReport = runReportPhase(command);
+        return new PipelineResult(reviewReport, testCaseReports);
     }
 
     private StackAdapter detectStackAdapter(Path repoRoot) {

@@ -7,20 +7,33 @@ import java.util.List;
 
 /**
  * CLI 실행 인자를 정규화한 커맨드.
- * --repo=<path>       대상 레포 루트 (기본값: 현재 디렉토리)
- * --rulepack=<path>   룰팩 디렉토리 (기본값: ./rulepack)
- * --config=<path>     .review.yml 경로 (기본값: <repo>/.review.yml)
- * --findings=<path>   BUILD 단계 산출물(중간 Findings JSON) 경로 (기본값: <repo>/build/review-findings.json)
- * --phase=build|report|all  샌드박스 분리 실행 단계 (기본값: all, 설계서 1.3 참고)
+ * --repo=<path>         대상 레포 루트 (기본값: 현재 디렉토리)
+ * --rulepack=<path>     룰팩 디렉토리 (기본값: ./rulepack)
+ * --config=<path>       .review.yml 경로 (기본값: <repo>/.review.yml)
+ * --findings=<path>     BUILD 단계 산출물(중간 Findings JSON) 경로 (기본값: <repo>/build/review-findings.json)
+ * --gentest=<path>      GENTEST 단계 산출물(TC-ID ↔ 테스트 매핑) 경로 (기본값: <repo>/build/gen-test-mapping.json)
+ * --testreport=<path>   TESTRUN 단계 산출물(TC-ID별 최종 판정) 경로 (기본값: <repo>/build/testcase-report.json)
+ * --phase=build|gentest|testrun|report|all  샌드박스 분리 실행 단계 (기본값: all, 설계서 1.3 참고)
  *
- * phase가 나뉘는 이유: build/lint는 대상 레포의 신뢰할 수 없는 코드를 실행하므로 시크릿 없이
- * 네트워크 차단 컨테이너에서, LLM 리뷰/PR 코멘트는 시크릿과 네트워크가 필요하지만 대상 레포
- * 코드를 실행하지는 않는 별도 프로세스에서 돌린다.
+ * phase가 나뉘는 이유:
+ * - build/testrun: 대상 레포의 코드를 실제로 컴파일·실행하므로 시크릿 없이 네트워크 차단
+ *   컨테이너에서 돈다 (testrun은 tester가 새로 쓴 테스트까지 포함해서 실행하지만, 그 실행
+ *   자체는 여전히 "대상 레포 코드 실행"이므로 같은 원칙을 적용한다).
+ * - gentest/report: LLM 호출이 필요해 시크릿/네트워크가 있지만, 대상 레포 코드를 읽기만
+ *   하고(gentest는 새 테스트 파일을 쓰기도 한다) 실행하지는 않는다.
  */
-public record ReviewCommand(Path repoRoot, Path rulepackDir, Path configPath, Path findingsPath, Phase phase) {
+public record ReviewCommand(
+        Path repoRoot,
+        Path rulepackDir,
+        Path configPath,
+        Path findingsPath,
+        Path genTestPath,
+        Path testCaseReportPath,
+        Phase phase
+) {
 
     public enum Phase {
-        BUILD, REPORT, ALL
+        BUILD, GENTEST, TESTRUN, REPORT, ALL
     }
 
     public static ReviewCommand from(ApplicationArguments args) {
@@ -28,8 +41,10 @@ public record ReviewCommand(Path repoRoot, Path rulepackDir, Path configPath, Pa
         Path rulepackDir = pathOption(args, "rulepack", Path.of("./rulepack"));
         Path configPath = pathOption(args, "config", repoRoot.resolve(".review.yml"));
         Path findingsPath = pathOption(args, "findings", repoRoot.resolve("build/review-findings.json"));
+        Path genTestPath = pathOption(args, "gentest", repoRoot.resolve("build/gen-test-mapping.json"));
+        Path testCaseReportPath = pathOption(args, "testreport", repoRoot.resolve("build/testcase-report.json"));
         Phase phase = phaseOption(args);
-        return new ReviewCommand(repoRoot, rulepackDir, configPath, findingsPath, phase);
+        return new ReviewCommand(repoRoot, rulepackDir, configPath, findingsPath, genTestPath, testCaseReportPath, phase);
     }
 
     private static Phase phaseOption(ApplicationArguments args) {
@@ -39,6 +54,8 @@ public record ReviewCommand(Path repoRoot, Path rulepackDir, Path configPath, Pa
         }
         return switch (raw.trim().toLowerCase()) {
             case "build" -> Phase.BUILD;
+            case "gentest" -> Phase.GENTEST;
+            case "testrun" -> Phase.TESTRUN;
             case "report" -> Phase.REPORT;
             case "all" -> Phase.ALL;
             default -> throw new IllegalArgumentException("unknown phase: " + raw);

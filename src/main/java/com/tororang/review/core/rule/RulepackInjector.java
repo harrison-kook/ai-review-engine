@@ -24,6 +24,7 @@ public final class RulepackInjector {
         copyDirIfExists(rulepackDir.resolve("schema"), claudeDir.resolve("rulepack/schema"));
         for (String profile : profiles) {
             copyDirIfExists(rulepackDir.resolve("rules").resolve(profile), claudeDir.resolve("rulepack/rules").resolve(profile));
+            copyDirIfExists(rulepackDir.resolve("testcases").resolve(profile), claudeDir.resolve("rulepack/testcases").resolve(profile));
         }
     }
 

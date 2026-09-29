@@ -1,6 +1,8 @@
 package com.tororang.review.core.pipeline;
 
 import com.tororang.review.core.config.Gate;
+import com.tororang.review.core.llm.GenTestStatus;
+import com.tororang.review.core.llm.GeneratedTestCase;
 import com.tororang.review.core.llm.LlmClient;
 import com.tororang.review.core.llm.ReviewRequest;
 import com.tororang.review.core.llm.ReviewResult;
@@ -33,6 +35,7 @@ class ReviewPipelineTest {
         boolean detected = true;
         StepResult buildResult = new StepResult(true, 0, "ok");
         List<Finding> lintFindings = List.of();
+        TestResult testResult = TestResult.NONE;
 
         @Override
         public String id() {
@@ -56,7 +59,7 @@ class ReviewPipelineTest {
 
         @Override
         public TestResult test(Workspace ws) {
-            return TestResult.NONE;
+            return testResult;
         }
 
         @Override
@@ -67,6 +70,7 @@ class ReviewPipelineTest {
 
     private static class FakeLlmClient implements LlmClient {
         List<FindingCandidate> candidates = List.of();
+        List<com.tororang.review.core.llm.GeneratedTestCase> generatedTests = List.of();
 
         @Override
         public ReviewResult review(ReviewRequest request) {
@@ -75,12 +79,17 @@ class ReviewPipelineTest {
 
         @Override
         public TestGenResult generateTests(TestGenRequest request) {
-            throw new UnsupportedOperationException();
+            return new TestGenResult(generatedTests, "raw");
         }
     }
 
     private Finding finding(String ruleId, String fingerprint) {
         return new Finding(ruleId, Severity.HIGH, Source.CHECKSTYLE, "A.java", 1, "msg", "evidence", null, fingerprint);
+    }
+
+    private ReviewCommand command(Path dir, Path rulepackDir, Path configPath, Path findingsPath, ReviewCommand.Phase phase) {
+        return new ReviewCommand(dir, rulepackDir, configPath, findingsPath,
+                dir.resolve("build/gen-test-mapping.json"), dir.resolve("build/testcase-report.json"), phase);
     }
 
     private void writeConfig(Path dir) throws IOException {
@@ -98,7 +107,7 @@ class ReviewPipelineTest {
         ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
 
         Path findingsPath = dir.resolve("build/review-findings.json");
-        ReviewCommand command = new ReviewCommand(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
+        ReviewCommand command = command(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
                 findingsPath, ReviewCommand.Phase.BUILD);
 
         pipeline.runBuildPhase(command);
@@ -112,7 +121,7 @@ class ReviewPipelineTest {
         stackAdapter.buildResult = new StepResult(false, 1, "compile error");
         ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
 
-        ReviewCommand command = new ReviewCommand(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
+        ReviewCommand command = command(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
                 dir.resolve("build/review-findings.json"), ReviewCommand.Phase.BUILD);
 
         assertThatThrownBy(() -> pipeline.runBuildPhase(command))
@@ -126,7 +135,7 @@ class ReviewPipelineTest {
         FakeStackAdapter stackAdapter = new FakeStackAdapter();
         ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
 
-        ReviewCommand command = new ReviewCommand(dir, dir.resolve("nonexistent-rulepack"),
+        ReviewCommand command = command(dir, dir.resolve("nonexistent-rulepack"),
                 dir.resolve("nonexistent-config.yml"), dir.resolve("build/review-findings.json"),
                 ReviewCommand.Phase.BUILD);
 
@@ -150,7 +159,7 @@ class ReviewPipelineTest {
                 "B.java", 2, "n+1", "orders.forEach(...)", "fetch join"));
 
         ReviewPipeline pipeline = new ReviewPipeline(List.of(new FakeStackAdapter()), llmClient);
-        ReviewCommand command = new ReviewCommand(dir, rulepackDir, dir.resolve(".review.yml"),
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
                 findingsPath, ReviewCommand.Phase.REPORT);
 
         ReviewReport report = pipeline.runReportPhase(command);
@@ -160,7 +169,7 @@ class ReviewPipelineTest {
     }
 
     @Test
-    void runExecutesBothPhasesEndToEnd(@TempDir Path dir) throws IOException {
+    void runExecutesAllFourPhasesEndToEnd(@TempDir Path dir) throws IOException {
         writeConfig(dir);
         Path rulepackDir = dir.resolve("rulepack");
         Files.createDirectories(rulepackDir);
@@ -172,13 +181,121 @@ class ReviewPipelineTest {
                 "C.java", 3, "msg", "evidence", null));
 
         ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), llmClient);
-        ReviewCommand command = new ReviewCommand(dir, rulepackDir, dir.resolve(".review.yml"),
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
                 dir.resolve("build/review-findings.json"), ReviewCommand.Phase.ALL);
 
-        ReviewReport report = pipeline.run(command);
+        PipelineResult result = pipeline.run(command);
 
-        assertThat(report.findings()).extracting(Finding::ruleId).containsExactlyInAnyOrder("STYLE-010", "SEC-001");
-        assertThat(report.gateFailed()).isFalse();
-        assertThat(report.config().gate()).isEqualTo(Gate.DISABLED);
+        assertThat(result.reviewReport().findings()).extracting(Finding::ruleId)
+                .containsExactlyInAnyOrder("STYLE-010", "SEC-001");
+        assertThat(result.reviewReport().gateFailed()).isFalse();
+        assertThat(result.reviewReport().config().gate()).isEqualTo(Gate.DISABLED);
+        assertThat(result.testCaseReports()).isEmpty(); // rulepackDir에 testcases/가 없으므로 빈 카탈로그
+    }
+
+    @Test
+    void genTestPhaseWritesMappingFromLlm(@TempDir Path dir) throws IOException {
+        writeConfig(dir);
+        Path rulepackDir = dir.resolve("rulepack");
+        Files.createDirectories(rulepackDir);
+
+        FakeLlmClient llmClient = new FakeLlmClient();
+        llmClient.generatedTests = List.of(new com.tororang.review.core.llm.GeneratedTestCase(
+                "TC-PAY-001", GenTestStatus.GENERATED, "com.example.PaymentServiceTest",
+                "duplicateApprove_isIdempotent", "src/test/java/com/example/PaymentServiceTest.java", null));
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(new FakeStackAdapter()), llmClient);
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.GENTEST);
+
+        pipeline.runGenTestPhase(command);
+
+        List<GeneratedTestCase> saved = JsonListIO.read(command.genTestPath(), GeneratedTestCase.class);
+        assertThat(saved).hasSize(1);
+        assertThat(saved.get(0).tcId()).isEqualTo("TC-PAY-001");
+        assertThat(saved.get(0).status()).isEqualTo(GenTestStatus.GENERATED);
+    }
+
+    @Test
+    void testRunPhaseCorrelatesGeneratedTestsWithExecutionResults(@TempDir Path dir) throws IOException {
+        writeConfig(dir);
+        Path rulepackDir = dir.resolve("rulepack");
+        Files.createDirectories(rulepackDir.resolve("testcases/common"));
+        Files.writeString(rulepackDir.resolve("testcases/common/payment.md"), """
+                ## TC-PAY-001: 중복 승인 멱등 처리
+                - 대상 계층: Service
+
+                ## TC-PAY-002: 부분 취소 초과 거부
+                - 대상 계층: Service
+
+                ## TC-PAY-003: 커버 안 된 시나리오
+                - 대상 계층: Service
+                """);
+
+        JsonListIO.write(dir.resolve("build/gen-test-mapping.json"), List.of(
+                new GeneratedTestCase("TC-PAY-001", GenTestStatus.GENERATED, "com.example.PaymentServiceTest",
+                        "duplicateApprove_isIdempotent", "src/test/java/com/example/PaymentServiceTest.java", null),
+                new GeneratedTestCase("TC-PAY-002", GenTestStatus.GENERATED, "com.example.PaymentServiceTest",
+                        "partialCancel_exceedsAmount_throws", "src/test/java/com/example/PaymentServiceTest.java", null)
+        ));
+
+        FakeStackAdapter stackAdapter = new FakeStackAdapter();
+        stackAdapter.testResult = new TestResult(false, 2, 1, List.of(
+                new com.tororang.review.core.stack.TestCaseResult(
+                        "com.example.PaymentServiceTest", "duplicateApprove_isIdempotent", true, null),
+                new com.tororang.review.core.stack.TestCaseResult(
+                        "com.example.PaymentServiceTest", "partialCancel_exceedsAmount_throws", false, "assertion failed")
+        ), "output");
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.TESTRUN);
+
+        List<TestCaseReport> reports = pipeline.runTestRunPhase(command);
+
+        assertThat(reports).hasSize(3);
+        TestCaseReport tc1 = findByTcId(reports, "TC-PAY-001");
+        assertThat(tc1.status()).isEqualTo(TestCaseReport.Status.PASSED);
+
+        TestCaseReport tc2 = findByTcId(reports, "TC-PAY-002");
+        assertThat(tc2.status()).isEqualTo(TestCaseReport.Status.FAILED);
+        assertThat(tc2.message()).isEqualTo("assertion failed");
+
+        TestCaseReport tc3 = findByTcId(reports, "TC-PAY-003");
+        assertThat(tc3.status()).isEqualTo(TestCaseReport.Status.NOT_GENERATED);
+
+        List<TestCaseReport> persisted = JsonListIO.read(command.testCaseReportPath(), TestCaseReport.class);
+        assertThat(persisted).hasSize(3);
+    }
+
+    @Test
+    void testRunPhaseTreatsMissingExecutionResultAsFailed(@TempDir Path dir) throws IOException {
+        writeConfig(dir);
+        Path rulepackDir = dir.resolve("rulepack");
+        Files.createDirectories(rulepackDir.resolve("testcases/common"));
+        Files.writeString(rulepackDir.resolve("testcases/common/x.md"), "## TC-X-001: 시나리오\n- 대상 계층: Service\n");
+
+        JsonListIO.write(dir.resolve("build/gen-test-mapping.json"), List.of(
+                new GeneratedTestCase("TC-X-001", GenTestStatus.GENERATED, "com.example.XTest",
+                        "someMethod", "src/test/java/com/example/XTest.java", null)
+        ));
+
+        // 컴파일 실패 등으로 실행 결과 자체가 없는 상황을 흉내낸다 (cases가 비어있음)
+        FakeStackAdapter stackAdapter = new FakeStackAdapter();
+        stackAdapter.testResult = new TestResult(false, 0, 0, List.of(), "compile error");
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.TESTRUN);
+
+        List<TestCaseReport> reports = pipeline.runTestRunPhase(command);
+
+        assertThat(reports).hasSize(1);
+        assertThat(reports.get(0).status()).isEqualTo(TestCaseReport.Status.FAILED);
+    }
+
+    private TestCaseReport findByTcId(List<TestCaseReport> reports, String tcId) {
+        return reports.stream().filter(r -> r.tcId().equals(tcId)).findFirst()
+                .orElseThrow(() -> new AssertionError("no report for " + tcId));
     }
 }

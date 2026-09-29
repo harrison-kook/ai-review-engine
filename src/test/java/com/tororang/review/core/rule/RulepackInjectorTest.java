@@ -35,6 +35,9 @@ class RulepackInjectorTest {
         Files.createDirectories(rulepackDir.resolve("rules/team"));
         Files.writeString(rulepackDir.resolve("rules/team/our-team.md"), "TEAM-001");
 
+        Files.createDirectories(rulepackDir.resolve("testcases/common"));
+        Files.writeString(rulepackDir.resolve("testcases/common/api-contract.md"), "TC-API-001");
+
         injector.inject(rulepackDir, repoRoot, List.of("common"));
 
         assertThat(repoRoot.resolve(".claude/CLAUDE.md")).exists().content().isEqualTo("공통 지침");
@@ -42,6 +45,7 @@ class RulepackInjectorTest {
         assertThat(repoRoot.resolve(".claude/commands/review.md")).exists();
         assertThat(repoRoot.resolve(".claude/rulepack/rules/common/security.md")).exists();
         assertThat(repoRoot.resolve(".claude/rulepack/rules/team")).doesNotExist();
+        assertThat(repoRoot.resolve(".claude/rulepack/testcases/common/api-contract.md")).exists();
     }
 
     @Test

@@ -1,6 +1,12 @@
 package com.tororang.review.core.stack;
 
-public record TestResult(boolean success, int totalTests, int failedTests, String output) {
+import java.util.List;
 
-    public static final TestResult NONE = new TestResult(true, 0, 0, "no tests executed");
+public record TestResult(boolean success, int totalTests, int failedTests, List<TestCaseResult> cases, String output) {
+
+    public static final TestResult NONE = new TestResult(true, 0, 0, List.of(), "no tests executed");
+
+    public TestResult {
+        cases = List.copyOf(cases);
+    }
 }

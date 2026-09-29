@@ -19,6 +19,8 @@ class ReviewCommandTest {
         assertThat(command.rulepackDir()).isEqualTo(Path.of("./rulepack"));
         assertThat(command.configPath()).isEqualTo(Path.of(".").resolve(".review.yml"));
         assertThat(command.findingsPath()).isEqualTo(Path.of(".").resolve("build/review-findings.json"));
+        assertThat(command.genTestPath()).isEqualTo(Path.of(".").resolve("build/gen-test-mapping.json"));
+        assertThat(command.testCaseReportPath()).isEqualTo(Path.of(".").resolve("build/testcase-report.json"));
     }
 
     @Test
@@ -26,6 +28,20 @@ class ReviewCommandTest {
         ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments("--phase=build"));
 
         assertThat(command.phase()).isEqualTo(ReviewCommand.Phase.BUILD);
+    }
+
+    @Test
+    void parsesGenTestPhase() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments("--phase=gentest"));
+
+        assertThat(command.phase()).isEqualTo(ReviewCommand.Phase.GENTEST);
+    }
+
+    @Test
+    void parsesTestRunPhase() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments("--phase=testrun"));
+
+        assertThat(command.phase()).isEqualTo(ReviewCommand.Phase.TESTRUN);
     }
 
     @Test
@@ -45,11 +61,14 @@ class ReviewCommandTest {
     @Test
     void honorsExplicitPaths() {
         ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments(
-                "--repo=/repo", "--rulepack=/rp", "--config=/repo/custom.yml", "--findings=/repo/f.json"));
+                "--repo=/repo", "--rulepack=/rp", "--config=/repo/custom.yml", "--findings=/repo/f.json",
+                "--gentest=/repo/g.json", "--testreport=/repo/t.json"));
 
         assertThat(command.repoRoot()).isEqualTo(Path.of("/repo"));
         assertThat(command.rulepackDir()).isEqualTo(Path.of("/rp"));
         assertThat(command.configPath()).isEqualTo(Path.of("/repo/custom.yml"));
         assertThat(command.findingsPath()).isEqualTo(Path.of("/repo/f.json"));
+        assertThat(command.genTestPath()).isEqualTo(Path.of("/repo/g.json"));
+        assertThat(command.testCaseReportPath()).isEqualTo(Path.of("/repo/t.json"));
     }
 }

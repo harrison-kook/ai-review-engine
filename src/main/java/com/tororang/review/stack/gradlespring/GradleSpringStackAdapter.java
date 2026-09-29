@@ -6,6 +6,7 @@ import com.tororang.review.core.model.FindingsFilter;
 import com.tororang.review.core.stack.CoverageReport;
 import com.tororang.review.core.stack.StackAdapter;
 import com.tororang.review.core.stack.StepResult;
+import com.tororang.review.core.stack.TestCaseResult;
 import com.tororang.review.core.stack.TestResult;
 import com.tororang.review.core.stack.Workspace;
 import org.slf4j.Logger;
@@ -34,6 +35,7 @@ public class GradleSpringStackAdapter implements StackAdapter {
     private final CheckstyleReportParser checkstyleParser = new CheckstyleReportParser();
     private final PmdReportParser pmdParser = new PmdReportParser();
     private final SpotBugsReportParser spotBugsParser = new SpotBugsReportParser();
+    private final JUnitReportParser junitParser = new JUnitReportParser();
 
     public GradleSpringStackAdapter() {
         this(new GradleWrapperRunner());
@@ -86,23 +88,20 @@ public class GradleSpringStackAdapter implements StackAdapter {
 
         Path testResultsDir = repoRoot.resolve("build/test-results/test");
         if (!Files.isDirectory(testResultsDir)) {
-            return new TestResult(result.success(), 0, 0, result.output());
+            return new TestResult(result.success(), 0, 0, List.of(), result.output());
         }
 
-        int total = 0;
-        int failed = 0;
+        List<TestCaseResult> cases = new ArrayList<>();
         try (var files = Files.list(testResultsDir)) {
             for (Path xml : files.filter(p -> p.toString().endsWith(".xml")).toList()) {
-                Document doc = XmlReports.parse(xml);
-                Element root = doc.getDocumentElement();
-                total += parseIntAttr(root, "tests");
-                failed += parseIntAttr(root, "failures") + parseIntAttr(root, "errors");
+                cases.addAll(junitParser.parse(xml));
             }
         } catch (Exception e) {
             log.warn("failed to parse junit xml results in {}: {}", testResultsDir, e.getMessage());
         }
 
-        return new TestResult(failed == 0, total, failed, result.output());
+        int failed = (int) cases.stream().filter(c -> !c.passed()).count();
+        return new TestResult(failed == 0, cases.size(), failed, cases, result.output());
     }
 
     @Override
