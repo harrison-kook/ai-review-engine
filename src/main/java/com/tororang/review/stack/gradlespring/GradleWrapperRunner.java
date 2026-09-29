@@ -37,6 +37,10 @@ public class GradleWrapperRunner {
         List<String> command = new ArrayList<>();
         command.add(wrapperPath.toString());
         command.add("--console=plain");
+        // 샌드박스는 매 phase마다 새 컨테이너로 뜨는 1회성 실행이라 데몬 재사용 이점이 없고,
+        // 컨테이너 종료 시 데몬이 완전히 죽지 않은 채로 남아 다음 컨테이너의 ~/.gradle 캐시
+        // 잠금(journal-1.lock)과 충돌하는 문제가 있어 항상 끈다.
+        command.add("--no-daemon");
         command.addAll(List.of(gradleArgs));
 
         ProcessOutcome outcome = ProcessExecutor.run(repoRoot, timeout, command);
