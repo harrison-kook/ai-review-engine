@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # 이전 workflow_run(build)의 아티팩트를 다운로드하는 데 필요
   pull-requests: write
   security-events: write  # SARIF를 Code Scanning 탭에 업로드하는 데 필요
 
