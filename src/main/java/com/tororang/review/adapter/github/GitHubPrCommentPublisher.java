@@ -17,8 +17,9 @@ import java.util.Set;
  */
 public class GitHubPrCommentPublisher implements PrCommentPublisher {
 
-    private static final String FINGERPRINT_MARKER_PREFIX = "<!-- review-bot:fingerprint:";
-    private static final String FINGERPRINT_MARKER_SUFFIX = " -->";
+    static final String FINGERPRINT_MARKER_PREFIX = "<!-- review-bot:fingerprint:";
+    static final String RULE_ID_MARKER_PREFIX = "<!-- review-bot:ruleId:";
+    private static final String MARKER_SUFFIX = " -->";
     static final String SUMMARY_MARKER = "<!-- review-bot:summary -->";
 
     private final RestTemplate restTemplate;
@@ -69,10 +70,11 @@ public class GitHubPrCommentPublisher implements PrCommentPublisher {
         String suggestion = (finding.suggestion() == null || finding.suggestion().isBlank())
                 ? ""
                 : "\n\n**제안**: " + finding.suggestion();
-        return "**[%s] %s** (%s)\n\n%s\n\n```\n%s\n```%s\n\n%s%s%s".formatted(
+        return "**[%s] %s** (%s)\n\n%s\n\n```\n%s\n```%s\n\n%s%s%s\n%s%s%s".formatted(
                 finding.severity(), finding.ruleId(), finding.source(),
                 finding.message(), finding.evidence(), suggestion,
-                FINGERPRINT_MARKER_PREFIX, finding.fingerprint(), FINGERPRINT_MARKER_SUFFIX
+                FINGERPRINT_MARKER_PREFIX, finding.fingerprint(), MARKER_SUFFIX,
+                RULE_ID_MARKER_PREFIX, finding.ruleId(), MARKER_SUFFIX
         );
     }
 
@@ -136,7 +138,7 @@ public class GitHubPrCommentPublisher implements PrCommentPublisher {
             return Optional.empty();
         }
         int contentStart = start + markerPrefix.length();
-        int end = body.indexOf(FINGERPRINT_MARKER_SUFFIX, contentStart);
+        int end = body.indexOf(MARKER_SUFFIX, contentStart);
         if (end < 0) {
             return Optional.empty();
         }

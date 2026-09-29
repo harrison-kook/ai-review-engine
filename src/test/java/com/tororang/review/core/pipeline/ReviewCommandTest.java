@@ -21,6 +21,9 @@ class ReviewCommandTest {
         assertThat(command.findingsPath()).isEqualTo(Path.of(".").resolve("build/review-findings.json"));
         assertThat(command.genTestPath()).isEqualTo(Path.of(".").resolve("build/gen-test-mapping.json"));
         assertThat(command.testCaseReportPath()).isEqualTo(Path.of(".").resolve("build/testcase-report.json"));
+        assertThat(command.githubRepo()).isNull();
+        assertThat(command.maxFeedbackPullRequests()).isEqualTo(200);
+        assertThat(command.diffBase()).isEqualTo("origin/main");
     }
 
     @Test
@@ -52,6 +55,29 @@ class ReviewCommandTest {
     }
 
     @Test
+    void parsesFeedbackPhase() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments("--phase=feedback"));
+
+        assertThat(command.phase()).isEqualTo(ReviewCommand.Phase.FEEDBACK);
+    }
+
+    @Test
+    void parsesFeedbackOptions() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments(
+                "--phase=feedback", "--github-repo=our-org/our-repo", "--max-prs=50"));
+
+        assertThat(command.githubRepo()).isEqualTo("our-org/our-repo");
+        assertThat(command.maxFeedbackPullRequests()).isEqualTo(50);
+    }
+
+    @Test
+    void rejectsInvalidMaxPrs() {
+        assertThatThrownBy(() -> ReviewCommand.from(new DefaultApplicationArguments("--max-prs=abc")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-prs");
+    }
+
+    @Test
     void rejectsUnknownPhase() {
         assertThatThrownBy(() -> ReviewCommand.from(new DefaultApplicationArguments("--phase=bogus")))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -70,5 +96,12 @@ class ReviewCommandTest {
         assertThat(command.findingsPath()).isEqualTo(Path.of("/repo/f.json"));
         assertThat(command.genTestPath()).isEqualTo(Path.of("/repo/g.json"));
         assertThat(command.testCaseReportPath()).isEqualTo(Path.of("/repo/t.json"));
+    }
+
+    @Test
+    void honorsDiffBase() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments("--diff-base=main"));
+
+        assertThat(command.diffBase()).isEqualTo("main");
     }
 }

@@ -8,6 +8,7 @@ import com.tororang.review.core.config.ReviewMode;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.Severity;
 import com.tororang.review.core.model.Source;
+import com.tororang.review.core.adapter.RuleFeedbackSummary;
 import com.tororang.review.core.pipeline.CoverageDelta;
 import com.tororang.review.core.pipeline.TestCaseReport;
 import com.tororang.review.core.renderer.ReviewReport;
@@ -122,5 +123,30 @@ class MarkdownReportWriterTest {
 
         String content = Files.readString(output);
         assertThat(content).contains("min_mutation_score: 50.00").contains("PASS");
+    }
+
+    @Test
+    void writesFeedbackReportTable(@TempDir Path dir) throws IOException {
+        List<RuleFeedbackSummary> summaries = List.of(
+                RuleFeedbackSummary.of("JPA-003", 3, 0, 2),
+                RuleFeedbackSummary.of("SEC-002", 5, 4, 0)
+        );
+
+        Path output = dir.resolve("feedback-report.md");
+        writer.writeFeedbackReport(summaries, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("# 오탐 피드백 리포트");
+        assertThat(content).contains("JPA-003").contains("66.7%");
+        assertThat(content).contains("SEC-002").contains("0.0%");
+    }
+
+    @Test
+    void writesEmptyFeedbackReportWhenNoData(@TempDir Path dir) throws IOException {
+        Path output = dir.resolve("feedback-report.md");
+        writer.writeFeedbackReport(List.of(), output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("피드백 데이터 없음");
     }
 }

@@ -2,6 +2,7 @@ package com.tororang.review.renderer.markdown;
 
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.Severity;
+import com.tororang.review.core.adapter.RuleFeedbackSummary;
 import com.tororang.review.core.pipeline.CoverageDelta;
 import com.tororang.review.core.pipeline.TestCaseReport;
 import com.tororang.review.core.renderer.ReviewReport;
@@ -163,6 +164,41 @@ public final class MarkdownReportWriter {
                     report.config().gate().minMutationScore(), failed ? "**FAIL**" : "PASS"));
         }
         sb.append("\n");
+    }
+
+    /**
+     * 설계서 8장 "오탐 피드백 루프" 산출물. 룰 튜닝은 이 리포트를 사람이 보고 판단해서
+     * rules/*.md를 직접 고치는 수동 과정이다 — 이 도구는 데이터만 모아준다.
+     */
+    public void writeFeedbackReport(List<RuleFeedbackSummary> summaries, Path outputPath) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# 오탐 피드백 리포트\n\n");
+        sb.append("생성 시각: ").append(Instant.now()).append("\n\n");
+        sb.append("👎 반응이 달린 review-bot 코멘트를 규칙 ID별로 집계했습니다. downvoteRate가 "
+                + "높을수록 그 규칙이 자주 오탐으로 지목됐다는 뜻입니다 — rules/*.md에서 판단 기준을 "
+                + "다듬거나 심각도를 낮추는 걸 고려하세요.\n\n");
+
+        if (summaries.isEmpty()) {
+            sb.append("피드백 데이터 없음.\n\n");
+        } else {
+            sb.append("| 규칙 ID | 오탐률 | 코멘트 수 | 👍 | 👎 |\n");
+            sb.append("|---|---|---|---|---|\n");
+            for (RuleFeedbackSummary summary : summaries) {
+                sb.append(String.format("| %s | %.1f%% | %d | %d | %d |%n",
+                        summary.ruleId(), summary.downvoteRate(), summary.totalComments(),
+                        summary.thumbsUp(), summary.thumbsDown()));
+            }
+            sb.append("\n");
+        }
+
+        try {
+            if (outputPath.getParent() != null) {
+                Files.createDirectories(outputPath.getParent());
+            }
+            Files.writeString(outputPath, sb.toString());
+        } catch (IOException e) {
+            throw new UncheckedIOException("failed to write feedback report: " + outputPath, e);
+        }
     }
 
     private String escapeCell(String text) {

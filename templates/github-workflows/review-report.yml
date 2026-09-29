@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  security-events: write  # SARIF를 Code Scanning 탭에 업로드하는 데 필요
 
 jobs:
   report:
@@ -68,3 +69,11 @@ jobs:
             --phase=report --repo=/workspace --rulepack=/rulepack \
             --config=/workspace/.review.yml \
             --findings=/workspace/build/review-findings.json
+
+      # PR 코멘트와 별개로 SARIF를 Code Scanning 탭에 올려두면, 다른 보안 스캐너 결과와
+      # 한 화면에서 보이고 브랜치/PR 넘어 히스토리가 남는다 (설계서 10장).
+      - name: Upload SARIF to Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: build/review-report.sarif

@@ -1,4 +1,4 @@
-package com.tororang.review.adapter.github;
+package com.tororang.review.core.util;
 
 import java.util.Set;
 import java.util.TreeSet;
@@ -6,8 +6,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * GitHub PR files API의 "patch" 필드(unified diff hunk 텍스트)에서 새 파일 기준으로
+ * unified diff hunk 텍스트("@@ -a,b +c,d @@"로 시작하는 부분)에서 새 파일 기준으로
  * 추가/변경된 라인 번호를 뽑아낸다. 삭제된 라인은 새 파일에 없으므로 포함하지 않는다.
+ * GitHub PR files API의 patch 필드, `git diff` 출력 모두 이 형식을 쓴다 — GitHub 전용이
+ * 아니라서 core.util에 둔다 (adapter.github, adapter.git 양쪽에서 재사용).
  */
 public final class UnifiedDiffParser {
 

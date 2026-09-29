@@ -1,11 +1,17 @@
 package com.tororang.review;
 
+import com.tororang.review.adapter.git.LocalGitDiffCollector;
 import com.tororang.review.adapter.github.GitHubActionsContext;
 import com.tororang.review.adapter.github.GitHubDiffCollector;
+import com.tororang.review.adapter.github.GitHubFeedbackCollector;
 import com.tororang.review.adapter.github.GitHubPrCommentPublisher;
 import com.tororang.review.adapter.github.GitHubRestTemplates;
+import com.tororang.review.core.adapter.CommentFeedback;
 import com.tororang.review.core.adapter.DiffScope;
+import com.tororang.review.core.adapter.FeedbackAggregator;
+import com.tororang.review.core.adapter.FeedbackCollector;
 import com.tororang.review.core.adapter.PrCommentPublisher;
+import com.tororang.review.core.adapter.RuleFeedbackSummary;
 import com.tororang.review.core.config.Gate;
 import com.tororang.review.core.config.ReviewConfigLoader;
 import com.tororang.review.core.config.ReviewMode;
@@ -25,6 +31,7 @@ import com.tororang.review.core.renderer.ReviewReport;
 import com.tororang.review.core.stack.MutationReport;
 import com.tororang.review.renderer.markdown.MarkdownReportWriter;
 import com.tororang.review.renderer.prcomment.PrCommentRenderer;
+import com.tororang.review.renderer.sarif.SarifWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -33,6 +40,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
@@ -59,6 +67,7 @@ public class ReviewRunner implements ApplicationRunner {
 
     private final ReviewPipeline pipeline;
     private final MarkdownReportWriter markdownReportWriter = new MarkdownReportWriter();
+    private final SarifWriter sarifWriter = new SarifWriter();
 
     public ReviewRunner(ReviewPipeline pipeline) {
         this.pipeline = pipeline;
@@ -101,6 +110,7 @@ public class ReviewRunner implements ApplicationRunner {
                     System.exit(finishReport(result.reviewReport(), result.testCaseReports(),
                             result.coverageDelta(), result.mutationReport(), command));
                 }
+                case FEEDBACK -> System.exit(runFeedbackPhase(command));
             }
         } catch (BuildFailedException e) {
             log.error(e.getMessage());
@@ -120,6 +130,7 @@ public class ReviewRunner implements ApplicationRunner {
         if (ghContext.isPresent()) {
             report = renderToGitHub(report, ghContext.get());
         } else {
+            report = applyLocalDiffScopeIfNeeded(report, command);
             logFindingsToConsole(report);
             logTestCaseReportsToConsole(testCaseReports);
             logCoverageToConsole(coverageDelta);
@@ -131,10 +142,54 @@ public class ReviewRunner implements ApplicationRunner {
                 command.repoRoot().resolve("build/review-report.md"));
         log.info("리포트 파일: {}", command.repoRoot().resolve("build/review-report.md"));
 
+        Path sarifPath = command.repoRoot().resolve("build/review-report.sarif");
+        sarifWriter.write(report.findings(), sarifPath);
+        log.info("SARIF 파일: {}", sarifPath);
+
         Gate gate = report.config().gate();
         boolean failed = report.gateFailed() || anyFailed(testCaseReports)
                 || coverageGateFailed(coverageDelta, gate) || mutationGateFailed(mutationReport, gate);
         return failed ? 1 : 0;
+    }
+
+    /**
+     * 설계서 8장 오탐 피드백 루프. 로컬 레포/룰팩과 무관하게 GitHub API만으로 동작하는 배치
+     * 작업이다 — 주기적으로(예: 2주마다) 별도로 돌리는 것을 전제로 한다.
+     */
+    private int runFeedbackPhase(ReviewCommand command) {
+        if (command.githubRepo() == null || command.githubRepo().isBlank()) {
+            log.error("--github-repo=owner/repo 가 필요합니다");
+            return 1;
+        }
+        String[] parts = command.githubRepo().split("/", 2);
+        if (parts.length != 2) {
+            log.error("--github-repo 형식이 잘못됐습니다 (owner/repo 형태여야 함): {}", command.githubRepo());
+            return 1;
+        }
+        String token = firstNonBlank(System.getenv("GITHUB_TOKEN"), System.getenv("GH_TOKEN"));
+        if (token == null || token.isBlank()) {
+            log.error("GITHUB_TOKEN(또는 GH_TOKEN) 환경변수가 필요합니다");
+            return 1;
+        }
+
+        RestTemplate restTemplate = GitHubRestTemplates.withToken(token);
+        FeedbackCollector collector = new GitHubFeedbackCollector(restTemplate, parts[0], parts[1], command.maxFeedbackPullRequests());
+        List<CommentFeedback> raw = collector.collect();
+        List<RuleFeedbackSummary> summaries = FeedbackAggregator.aggregate(raw);
+
+        for (RuleFeedbackSummary summary : summaries) {
+            log.info("{}: 오탐률 {}% (코멘트 {}건, 👍{} 👎{})",
+                    summary.ruleId(), summary.downvoteRate(), summary.totalComments(), summary.thumbsUp(), summary.thumbsDown());
+        }
+
+        Path reportPath = command.repoRoot().resolve("build/feedback-report.md");
+        markdownReportWriter.writeFeedbackReport(summaries, reportPath);
+        log.info("피드백 리포트: {}", reportPath);
+        return 0;
+    }
+
+    private String firstNonBlank(String a, String b) {
+        return (a == null || a.isBlank()) ? b : a;
     }
 
     /** TESTRUN 단독 실행(phase=testrun)에서는 ReviewReport가 없어 gate만 설정에서 따로 읽는다. */
@@ -201,6 +256,24 @@ public class ReviewRunner implements ApplicationRunner {
         }
         log.info("뮤테이션 스코어: {}% ({}/{} killed)",
                 mutationReport.mutationScorePercent(), mutationReport.killedMutations(), mutationReport.totalMutations());
+    }
+
+    /**
+     * GitHub 컨텍스트 없는 로컬/CLI 실행에서 mode: diff가 실제로 뭔가 하게 만든다. 설계서
+     * 10장 "CLI 어댑터 + full 모드" — GitHub PR API 없이 로컬 git 히스토리로 diff 범위를 잡는다.
+     * git diff 계산이 실패해도(예: --diff-base가 존재하지 않는 ref) 리뷰 자체를 막지 않고
+     * 전체 범위로 진행한다.
+     */
+    private ReviewReport applyLocalDiffScopeIfNeeded(ReviewReport report, ReviewCommand command) {
+        if (report.config().mode() != ReviewMode.DIFF) {
+            return report;
+        }
+        DiffScope scope = new LocalGitDiffCollector(command.repoRoot(), command.diffBase()).fetchChangedLines();
+        List<Finding> scoped = report.findings().stream()
+                .filter(f -> scope.isInScope(f.file(), f.line()))
+                .toList();
+        log.info("로컬 git diff({}...HEAD) 범위로 제한: {}건 -> {}건", command.diffBase(), report.findings().size(), scoped.size());
+        return new ReviewReport(scoped, report.config());
     }
 
     private ReviewReport renderToGitHub(ReviewReport report, GitHubActionsContext ctx) {

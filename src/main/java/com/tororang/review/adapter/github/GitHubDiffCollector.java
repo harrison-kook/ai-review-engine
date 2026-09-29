@@ -2,6 +2,7 @@ package com.tororang.review.adapter.github;
 
 import com.tororang.review.core.adapter.DiffScope;
 import com.tororang.review.core.adapter.DiffSource;
+import com.tororang.review.core.util.UnifiedDiffParser;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 

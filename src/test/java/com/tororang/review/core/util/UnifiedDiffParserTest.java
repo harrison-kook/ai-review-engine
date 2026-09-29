@@ -1,4 +1,4 @@
-package com.tororang.review.adapter.github;
+package com.tororang.review.core.util;
 
 import org.junit.jupiter.api.Test;
 

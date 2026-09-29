@@ -104,7 +104,7 @@ class ReviewPipelineTest {
         return new ReviewCommand(dir, rulepackDir, configPath, findingsPath,
                 dir.resolve("build/gen-test-mapping.json"), dir.resolve("build/testcase-report.json"),
                 dir.resolve("build/baseline-coverage.json"), dir.resolve("build/coverage-delta.json"),
-                dir.resolve("build/mutation-report.json"), phase);
+                dir.resolve("build/mutation-report.json"), null, 200, "origin/main", phase);
     }
 
     private void writeConfig(Path dir) throws IOException {
