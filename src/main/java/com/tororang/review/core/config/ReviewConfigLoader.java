@@ -74,11 +74,22 @@ public final class ReviewConfigLoader {
         if (node == null || node.isMissingNode() || node.isNull()) {
             return Gate.DISABLED;
         }
-        JsonNode failOn = node.get("fail_on");
-        if (failOn == null || failOn.isNull()) {
-            return Gate.DISABLED;
-        }
-        return new Gate(Severity.valueOf(failOn.asText().toUpperCase()));
+        JsonNode failOnNode = node.get("fail_on");
+        Severity failOn = (failOnNode == null || failOnNode.isNull())
+                ? null
+                : Severity.valueOf(failOnNode.asText().toUpperCase());
+
+        JsonNode minCoverageNode = node.get("min_coverage_delta");
+        Double minCoverageDelta = (minCoverageNode == null || minCoverageNode.isNull())
+                ? null
+                : minCoverageNode.asDouble();
+
+        JsonNode minMutationNode = node.get("min_mutation_score");
+        Double minMutationScore = (minMutationNode == null || minMutationNode.isNull())
+                ? null
+                : minMutationNode.asDouble();
+
+        return new Gate(failOn, minCoverageDelta, minMutationScore);
     }
 
     private String textOrNull(JsonNode root, String field) {

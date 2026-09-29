@@ -36,6 +36,9 @@ class ReviewPipelineTest {
         StepResult buildResult = new StepResult(true, 0, "ok");
         List<Finding> lintFindings = List.of();
         TestResult testResult = TestResult.NONE;
+        // coverage()는 BUILD(baseline)와 TESTRUN(after)에서 순서대로 한 번씩 불린다.
+        List<CoverageReport> coverageResults = new java.util.ArrayList<>(List.of(CoverageReport.EMPTY, CoverageReport.EMPTY));
+        int coverageCallIndex = 0;
 
         @Override
         public String id() {
@@ -64,8 +67,18 @@ class ReviewPipelineTest {
 
         @Override
         public CoverageReport coverage(Workspace ws) {
+            if (coverageCallIndex < coverageResults.size()) {
+                return coverageResults.get(coverageCallIndex++);
+            }
             return CoverageReport.EMPTY;
         }
+
+        @Override
+        public com.tororang.review.core.stack.MutationReport mutate(Workspace ws) {
+            return mutationReport;
+        }
+
+        com.tororang.review.core.stack.MutationReport mutationReport = com.tororang.review.core.stack.MutationReport.EMPTY;
     }
 
     private static class FakeLlmClient implements LlmClient {
@@ -89,7 +102,9 @@ class ReviewPipelineTest {
 
     private ReviewCommand command(Path dir, Path rulepackDir, Path configPath, Path findingsPath, ReviewCommand.Phase phase) {
         return new ReviewCommand(dir, rulepackDir, configPath, findingsPath,
-                dir.resolve("build/gen-test-mapping.json"), dir.resolve("build/testcase-report.json"), phase);
+                dir.resolve("build/gen-test-mapping.json"), dir.resolve("build/testcase-report.json"),
+                dir.resolve("build/baseline-coverage.json"), dir.resolve("build/coverage-delta.json"),
+                dir.resolve("build/mutation-report.json"), phase);
     }
 
     private void writeConfig(Path dir) throws IOException {
@@ -142,6 +157,67 @@ class ReviewPipelineTest {
         pipeline.runBuildPhase(command);
 
         assertThat(FindingsIO.read(command.findingsPath())).isEmpty();
+    }
+
+    @Test
+    void buildPhaseWritesBaselineCoverage(@TempDir Path dir) {
+        FakeStackAdapter stackAdapter = new FakeStackAdapter();
+        stackAdapter.coverageResults = List.of(new CoverageReport(42.0, 42, 58));
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
+
+        ReviewCommand command = command(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.BUILD);
+
+        pipeline.runBuildPhase(command);
+
+        CoverageReport baseline = JsonIO.read(command.baselineCoveragePath(), CoverageReport.class, null);
+        assertThat(baseline).isNotNull();
+        assertThat(baseline.lineCoveragePercent()).isEqualTo(42.0);
+    }
+
+    @Test
+    void testRunPhaseComputesCoverageDeltaAgainstBaseline(@TempDir Path dir) throws IOException {
+        writeConfig(dir);
+        Path rulepackDir = dir.resolve("rulepack");
+        Files.createDirectories(rulepackDir);
+
+        JsonIO.write(dir.resolve("build/baseline-coverage.json"), new CoverageReport(40.0, 40, 60));
+
+        FakeStackAdapter stackAdapter = new FakeStackAdapter();
+        stackAdapter.coverageResults = List.of(new CoverageReport(55.0, 55, 45));
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.TESTRUN);
+
+        TestRunResult result = pipeline.runTestRunPhase(command);
+
+        assertThat(result.coverageDelta().baseline().lineCoveragePercent()).isEqualTo(40.0);
+        assertThat(result.coverageDelta().after().lineCoveragePercent()).isEqualTo(55.0);
+        assertThat(result.coverageDelta().deltaPercentagePoints()).isEqualTo(15.0);
+
+        CoverageDelta persisted = JsonIO.read(command.coverageDeltaPath(), CoverageDelta.class, null);
+        assertThat(persisted.deltaPercentagePoints()).isEqualTo(15.0);
+    }
+
+    @Test
+    void testRunPhaseTreatsMissingBaselineAsZeroCoverage(@TempDir Path dir) throws IOException {
+        writeConfig(dir);
+        Path rulepackDir = dir.resolve("rulepack");
+        Files.createDirectories(rulepackDir);
+
+        // baseline-coverage.json을 쓰지 않음 (BUILD 단계를 안 돌린 상황을 흉내)
+        FakeStackAdapter stackAdapter = new FakeStackAdapter();
+        stackAdapter.coverageResults = List.of(new CoverageReport(20.0, 20, 80));
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(stackAdapter), new FakeLlmClient());
+        ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.TESTRUN);
+
+        TestRunResult result = pipeline.runTestRunPhase(command);
+
+        assertThat(result.coverageDelta().baseline()).isEqualTo(CoverageReport.EMPTY);
+        assertThat(result.coverageDelta().deltaPercentagePoints()).isEqualTo(20.0);
     }
 
     @Test
@@ -251,7 +327,7 @@ class ReviewPipelineTest {
         ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
                 dir.resolve("build/review-findings.json"), ReviewCommand.Phase.TESTRUN);
 
-        List<TestCaseReport> reports = pipeline.runTestRunPhase(command);
+        List<TestCaseReport> reports = pipeline.runTestRunPhase(command).testCaseReports();
 
         assertThat(reports).hasSize(3);
         TestCaseReport tc1 = findByTcId(reports, "TC-PAY-001");
@@ -288,7 +364,7 @@ class ReviewPipelineTest {
         ReviewCommand command = command(dir, rulepackDir, dir.resolve(".review.yml"),
                 dir.resolve("build/review-findings.json"), ReviewCommand.Phase.TESTRUN);
 
-        List<TestCaseReport> reports = pipeline.runTestRunPhase(command);
+        List<TestCaseReport> reports = pipeline.runTestRunPhase(command).testCaseReports();
 
         assertThat(reports).hasSize(1);
         assertThat(reports.get(0).status()).isEqualTo(TestCaseReport.Status.FAILED);

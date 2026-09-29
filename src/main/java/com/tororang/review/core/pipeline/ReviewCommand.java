@@ -7,12 +7,15 @@ import java.util.List;
 
 /**
  * CLI 실행 인자를 정규화한 커맨드.
- * --repo=<path>         대상 레포 루트 (기본값: 현재 디렉토리)
- * --rulepack=<path>     룰팩 디렉토리 (기본값: ./rulepack)
- * --config=<path>       .review.yml 경로 (기본값: <repo>/.review.yml)
- * --findings=<path>     BUILD 단계 산출물(중간 Findings JSON) 경로 (기본값: <repo>/build/review-findings.json)
- * --gentest=<path>      GENTEST 단계 산출물(TC-ID ↔ 테스트 매핑) 경로 (기본값: <repo>/build/gen-test-mapping.json)
- * --testreport=<path>   TESTRUN 단계 산출물(TC-ID별 최종 판정) 경로 (기본값: <repo>/build/testcase-report.json)
+ * --repo=<path>              대상 레포 루트 (기본값: 현재 디렉토리)
+ * --rulepack=<path>          룰팩 디렉토리 (기본값: ./rulepack)
+ * --config=<path>            .review.yml 경로 (기본값: <repo>/.review.yml)
+ * --findings=<path>          BUILD 단계 산출물(중간 Findings JSON) 경로 (기본값: <repo>/build/review-findings.json)
+ * --gentest=<path>           GENTEST 단계 산출물(TC-ID ↔ 테스트 매핑) 경로 (기본값: <repo>/build/gen-test-mapping.json)
+ * --testreport=<path>        TESTRUN 단계 산출물(TC-ID별 최종 판정) 경로 (기본값: <repo>/build/testcase-report.json)
+ * --baseline-coverage=<path> BUILD 단계 산출물(생성 테스트 추가 전 커버리지) 경로 (기본값: <repo>/build/baseline-coverage.json)
+ * --coverage-delta=<path>    TESTRUN 단계 산출물(커버리지 증감) 경로 (기본값: <repo>/build/coverage-delta.json)
+ * --mutation-report=<path>   TESTRUN 단계 산출물(PIT 뮤테이션 스코어) 경로 (기본값: <repo>/build/mutation-report.json)
  * --phase=build|gentest|testrun|report|all  샌드박스 분리 실행 단계 (기본값: all, 설계서 1.3 참고)
  *
  * phase가 나뉘는 이유:
@@ -29,6 +32,9 @@ public record ReviewCommand(
         Path findingsPath,
         Path genTestPath,
         Path testCaseReportPath,
+        Path baselineCoveragePath,
+        Path coverageDeltaPath,
+        Path mutationReportPath,
         Phase phase
 ) {
 
@@ -43,8 +49,12 @@ public record ReviewCommand(
         Path findingsPath = pathOption(args, "findings", repoRoot.resolve("build/review-findings.json"));
         Path genTestPath = pathOption(args, "gentest", repoRoot.resolve("build/gen-test-mapping.json"));
         Path testCaseReportPath = pathOption(args, "testreport", repoRoot.resolve("build/testcase-report.json"));
+        Path baselineCoveragePath = pathOption(args, "baseline-coverage", repoRoot.resolve("build/baseline-coverage.json"));
+        Path coverageDeltaPath = pathOption(args, "coverage-delta", repoRoot.resolve("build/coverage-delta.json"));
+        Path mutationReportPath = pathOption(args, "mutation-report", repoRoot.resolve("build/mutation-report.json"));
         Phase phase = phaseOption(args);
-        return new ReviewCommand(repoRoot, rulepackDir, configPath, findingsPath, genTestPath, testCaseReportPath, phase);
+        return new ReviewCommand(repoRoot, rulepackDir, configPath, findingsPath, genTestPath, testCaseReportPath,
+                baselineCoveragePath, coverageDeltaPath, mutationReportPath, phase);
     }
 
     private static Phase phaseOption(ApplicationArguments args) {

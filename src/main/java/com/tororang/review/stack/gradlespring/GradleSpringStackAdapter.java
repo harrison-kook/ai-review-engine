@@ -4,6 +4,7 @@ import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.FindingCandidate;
 import com.tororang.review.core.model.FindingsFilter;
 import com.tororang.review.core.stack.CoverageReport;
+import com.tororang.review.core.stack.MutationReport;
 import com.tororang.review.core.stack.StackAdapter;
 import com.tororang.review.core.stack.StepResult;
 import com.tororang.review.core.stack.TestCaseResult;
@@ -12,14 +13,15 @@ import com.tororang.review.core.stack.Workspace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * 설계서 4.2/7.1의 첫 스택 어댑터. build.gradle(.kts) 기반 Java/Spring 프로젝트를 대상으로 한다.
@@ -36,6 +38,8 @@ public class GradleSpringStackAdapter implements StackAdapter {
     private final PmdReportParser pmdParser = new PmdReportParser();
     private final SpotBugsReportParser spotBugsParser = new SpotBugsReportParser();
     private final JUnitReportParser junitParser = new JUnitReportParser();
+    private final JacocoReportParser jacocoParser = new JacocoReportParser();
+    private final PitestReportParser pitestParser = new PitestReportParser();
 
     public GradleSpringStackAdapter() {
         this(new GradleWrapperRunner());
@@ -107,23 +111,54 @@ public class GradleSpringStackAdapter implements StackAdapter {
     @Override
     public CoverageReport coverage(Workspace ws) {
         Path repoRoot = ws.repoRoot();
+        // jacoco 플러그인이 없으면 태스크 자체가 없어 실패하는데, 그 경우 아래에서
+        // 리포트 파일이 없는 것으로 자연스럽게 걸러진다(lint()의 check와 같은 패턴).
+        runner.run(repoRoot, "jacocoTestReport", "--continue");
+
         Path jacocoXml = repoRoot.resolve("build/reports/jacoco/test/jacocoTestReport.xml");
         if (!Files.isRegularFile(jacocoXml)) {
             return CoverageReport.EMPTY;
         }
+        return jacocoParser.parse(jacocoXml);
+    }
 
-        Document doc = XmlReports.parse(jacocoXml);
-        NodeList counters = doc.getDocumentElement().getElementsByTagName("counter");
-        for (int i = 0; i < counters.getLength(); i++) {
-            Element counter = (Element) counters.item(i);
-            if ("LINE".equals(counter.getAttribute("type"))) {
-                int missed = parseIntAttr(counter, "missed");
-                int covered = parseIntAttr(counter, "covered");
-                double percent = (missed + covered) == 0 ? 0.0 : (100.0 * covered) / (missed + covered);
-                return new CoverageReport(percent, covered, missed);
-            }
+    @Override
+    public MutationReport mutate(Workspace ws) {
+        Path repoRoot = ws.repoRoot();
+        // pitest 플러그인이 없으면 태스크 자체가 없어 실패하는데, 그 경우 아래에서
+        // 리포트 파일을 못 찾는 것으로 자연스럽게 걸러진다(lint()/coverage()와 같은 패턴).
+        // 뮤테이션 테스트는 원래 느리다 — target 레포가 이 플러그인을 켰다는 것 자체가
+        // 그 비용을 감수하겠다는 선택이므로 여기서 추가로 시간 제한을 두지 않는다.
+        runner.run(repoRoot, "pitest", "--continue");
+
+        Path mutationsXml = findLatestMutationsReport(repoRoot);
+        if (mutationsXml == null) {
+            return MutationReport.EMPTY;
         }
-        return CoverageReport.EMPTY;
+        return pitestParser.parse(mutationsXml);
+    }
+
+    private Path findLatestMutationsReport(Path repoRoot) {
+        Path pitestReportsDir = repoRoot.resolve("build/reports/pitest");
+        if (!Files.isDirectory(pitestReportsDir)) {
+            return null;
+        }
+        try (Stream<Path> paths = Files.walk(pitestReportsDir)) {
+            return paths.filter(p -> p.getFileName().toString().equals("mutations.xml"))
+                    .max(Comparator.comparing(this::lastModifiedOrEpoch))
+                    .orElse(null);
+        } catch (IOException e) {
+            log.debug("failed to search pitest reports under {}: {}", pitestReportsDir, e.getMessage());
+            return null;
+        }
+    }
+
+    private FileTime lastModifiedOrEpoch(Path path) {
+        try {
+            return Files.getLastModifiedTime(path);
+        } catch (IOException e) {
+            return FileTime.fromMillis(0);
+        }
     }
 
     private void collectIfPresent(Path reportFile, java.util.function.Consumer<Path> consumer) {
@@ -131,15 +166,6 @@ public class GradleSpringStackAdapter implements StackAdapter {
             consumer.accept(reportFile);
         } else {
             log.debug("lint report not found, skipping: {}", reportFile);
-        }
-    }
-
-    private int parseIntAttr(Element element, String attr) {
-        String value = element.getAttribute(attr);
-        try {
-            return value.isBlank() ? 0 : (int) Double.parseDouble(value);
-        } catch (NumberFormatException e) {
-            return 0;
         }
     }
 }

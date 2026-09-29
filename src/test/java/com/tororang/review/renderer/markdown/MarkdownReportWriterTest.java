@@ -8,8 +8,11 @@ import com.tororang.review.core.config.ReviewMode;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.Severity;
 import com.tororang.review.core.model.Source;
+import com.tororang.review.core.pipeline.CoverageDelta;
 import com.tororang.review.core.pipeline.TestCaseReport;
 import com.tororang.review.core.renderer.ReviewReport;
+import com.tororang.review.core.stack.CoverageReport;
+import com.tororang.review.core.stack.MutationReport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -45,7 +48,7 @@ class MarkdownReportWriterTest {
         );
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, testCaseReports, output);
+        writer.write(reviewReport, testCaseReports, null, null, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("# 코드 리뷰 리포트");
@@ -55,6 +58,8 @@ class MarkdownReportWriterTest {
         assertThat(content).contains("TC-PAY-001").contains("PASSED");
         assertThat(content).contains("TC-PAY-002").contains("FAILED").contains("assertion failed");
         assertThat(content).contains("TC-PAY-003").contains("NOT_GENERATED");
+        assertThat(content).contains("커버리지 정보 없음");
+        assertThat(content).contains("뮤테이션 테스트는 `.review.yml`의");
     }
 
     @Test
@@ -62,10 +67,60 @@ class MarkdownReportWriterTest {
         ReviewReport reviewReport = new ReviewReport(List.of(), config(Gate.DISABLED));
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, List.of(), output);
+        writer.write(reviewReport, List.of(), null, null, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("지적 사항 없음");
         assertThat(content).contains("테스트케이스 결과 없음");
+    }
+
+    @Test
+    void writesCoverageDeltaSectionWithGateStatus(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, 10.0, null)));
+        CoverageDelta delta = CoverageDelta.of(new CoverageReport(40.0, 40, 60), new CoverageReport(55.0, 55, 45));
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), delta, null, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("40.00%").contains("55.00%").contains("+15.00pp");
+        assertThat(content).contains("min_coverage_delta: 10.00").contains("PASS");
+    }
+
+    @Test
+    void marksCoverageGateAsFailedWhenDeltaBelowThreshold(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, 20.0, null)));
+        CoverageDelta delta = CoverageDelta.of(new CoverageReport(40.0, 40, 60), new CoverageReport(45.0, 45, 55));
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), delta, null, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("min_coverage_delta: 20.00").contains("**FAIL**");
+    }
+
+    @Test
+    void writesMutationSectionWithGateStatus(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, 70.0)));
+        MutationReport mutationReport = new MutationReport(66.66, 3, 2);
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), null, mutationReport, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("66.66%").contains("2/3 killed");
+        assertThat(content).contains("min_mutation_score: 70.00").contains("**FAIL**");
+    }
+
+    @Test
+    void marksMutationGateAsPassedWhenScoreMeetsThreshold(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, 50.0)));
+        MutationReport mutationReport = new MutationReport(66.66, 3, 2);
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), null, mutationReport, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("min_mutation_score: 50.00").contains("PASS");
     }
 }

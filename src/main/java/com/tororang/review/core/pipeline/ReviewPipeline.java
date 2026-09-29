@@ -15,6 +15,8 @@ import com.tororang.review.core.renderer.ReviewReport;
 import com.tororang.review.core.rule.RuleDefinition;
 import com.tororang.review.core.rule.RuleMerger;
 import com.tororang.review.core.rule.RulepackInjector;
+import com.tororang.review.core.stack.CoverageReport;
+import com.tororang.review.core.stack.MutationReport;
 import com.tororang.review.core.stack.StackAdapter;
 import com.tororang.review.core.stack.StepResult;
 import com.tororang.review.core.stack.TestCaseResult;
@@ -86,6 +88,14 @@ public class ReviewPipeline {
         log.info("deterministic findings: {}", deterministicFindings.size());
 
         FindingsIO.write(command.findingsPath(), deterministicFindings);
+
+        // 커버리지 게이트의 baseline: tester가 테스트를 추가하기 전, 기존 테스트만으로 측정한다.
+        // 기존 테스트가 실패하더라도 빌드 자체를 막지는 않는다 — 대상 레포의 기존 상태 문제이지
+        // 우리가 추가한 테스트와는 무관하다.
+        TestResult baselineTestResult = stackAdapter.test(workspace);
+        log.info("baseline tests: {}건 (실패 {}건)", baselineTestResult.totalTests(), baselineTestResult.failedTests());
+        CoverageReport baselineCoverage = stackAdapter.coverage(workspace);
+        JsonIO.write(command.baselineCoveragePath(), baselineCoverage);
     }
 
     public ReviewReport runReportPhase(ReviewCommand command) {
@@ -127,18 +137,37 @@ public class ReviewPipeline {
      * tester가 작성한 테스트를 포함해 전체 테스트를 실행하고(StackAdapter.test, 결정적), TC-ID별
      * 최종 판정을 만든다. build 단계와 같은 이유로 시크릿 없이 네트워크 차단 상태로 돌아야 한다.
      */
-    public List<TestCaseReport> runTestRunPhase(ReviewCommand command) {
+    public TestRunResult runTestRunPhase(ReviewCommand command) {
         ReviewConfig config = configLoader.load(command.configPath());
         List<TestCaseDefinition> catalog = testCaseCatalog.scanProfiles(command.rulepackDir(), config.profiles());
         List<GeneratedTestCase> mappings = JsonListIO.read(command.genTestPath(), GeneratedTestCase.class);
 
+        Workspace workspace = new Workspace(command.repoRoot());
         StackAdapter stackAdapter = detectStackAdapter(command.repoRoot());
-        TestResult testResult = stackAdapter.test(new Workspace(command.repoRoot()));
+        TestResult testResult = stackAdapter.test(workspace);
         log.info("실행된 테스트: {}건 (실패 {}건)", testResult.totalTests(), testResult.failedTests());
 
         List<TestCaseReport> reports = correlate(catalog, mappings, testResult.cases());
         JsonListIO.write(command.testCaseReportPath(), reports);
-        return reports;
+
+        CoverageReport afterCoverage = stackAdapter.coverage(workspace);
+        CoverageReport baselineCoverage = JsonIO.read(command.baselineCoveragePath(), CoverageReport.class, CoverageReport.EMPTY);
+        CoverageDelta coverageDelta = CoverageDelta.of(baselineCoverage, afterCoverage);
+        JsonIO.write(command.coverageDeltaPath(), coverageDelta);
+        log.info("커버리지: {}% -> {}% (Δ{}pp)",
+                baselineCoverage.lineCoveragePercent(), afterCoverage.lineCoveragePercent(), coverageDelta.deltaPercentagePoints());
+
+        // PIT은 느리다 — .review.yml이 뮤테이션 게이트를 명시적으로 켰을 때만 돌린다.
+        MutationReport mutationReport = config.gate().hasMutationThreshold()
+                ? stackAdapter.mutate(workspace)
+                : MutationReport.EMPTY;
+        JsonIO.write(command.mutationReportPath(), mutationReport);
+        if (config.gate().hasMutationThreshold()) {
+            log.info("뮤테이션 스코어: {}% ({}/{} killed)",
+                    mutationReport.mutationScorePercent(), mutationReport.killedMutations(), mutationReport.totalMutations());
+        }
+
+        return new TestRunResult(reports, coverageDelta, mutationReport);
     }
 
     private List<TestCaseReport> correlate(
@@ -185,9 +214,10 @@ public class ReviewPipeline {
     public PipelineResult run(ReviewCommand command) {
         runBuildPhase(command);
         runGenTestPhase(command);
-        List<TestCaseReport> testCaseReports = runTestRunPhase(command);
+        TestRunResult testRunResult = runTestRunPhase(command);
         ReviewReport reviewReport = runReportPhase(command);
-        return new PipelineResult(reviewReport, testCaseReports);
+        return new PipelineResult(reviewReport, testRunResult.testCaseReports(),
+                testRunResult.coverageDelta(), testRunResult.mutationReport());
     }
 
     private StackAdapter detectStackAdapter(Path repoRoot) {

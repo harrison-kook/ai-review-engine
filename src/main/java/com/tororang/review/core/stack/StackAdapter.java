@@ -22,4 +22,6 @@ public interface StackAdapter {
     TestResult test(Workspace ws);
 
     CoverageReport coverage(Workspace ws);
+
+    MutationReport mutate(Workspace ws);
 }
