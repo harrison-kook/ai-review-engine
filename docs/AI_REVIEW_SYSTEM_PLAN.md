@@ -397,30 +397,30 @@ SARIF 출력은 GitHub Code Scanning 탭에 업로드할 수 있어 범용성이
 ## 12. 1단계 작업 체크리스트
 
 ### 룰팩 저장소
-- [ ] `review-rulepack` 저장소 생성, `v0.1.0` 태그 규칙 정의
-- [ ] `CLAUDE.md` 작성 (리뷰 톤, 출력은 Findings JSON만, 근거 없는 지적 금지)
-- [ ] `rules/common/security.md` 규칙 5개 작성
-- [ ] `rules/java-spring/jpa.md`, `layering.md` 규칙 각 5개 작성
-- [ ] `rules/domain/payment.md` 규칙 작성
-- [ ] `agents/reviewer.md`, `commands/review.md` 작성
-- [ ] `schema/findings.schema.json`, `schema/review-config.schema.json` 작성
+- [x] `review-rulepack` 저장소 생성, `v0.1.0` 태그 규칙 정의 (`v0.2.0`까지 진행)
+- [x] `CLAUDE.md` 작성 (리뷰 톤, 출력은 Findings JSON만, 근거 없는 지적 금지)
+- [x] `rules/common/security.md` 규칙 5개 작성
+- [x] `rules/java-spring/jpa.md`, `layering.md` 규칙 각 5개 작성
+- [x] `rules/domain/payment.md` 규칙 작성
+- [x] `agents/reviewer.md`, `commands/review.md` 작성 (+ `agents/tester.md`, `commands/gen-test.md` 2단계에서 추가)
+- [x] `schema/findings.schema.json`, `schema/review-config.schema.json` 작성
 
 ### 엔진 저장소
-- [ ] `ai-review-engine` 단일 Spring Boot 프로젝트 생성 (web-application-type: none, 4.3 참고)
-- [ ] 패키지 구조(core/llm/stack/adapter/renderer) 생성 + `ArchitectureTest` 작성
-- [ ] 루트에 `docs/`, `rulepack/`, `CLAUDE.md` 배치
-- [ ] `core`: `.review.yml` 로딩 + 룰 병합 로직 + 단위 테스트
-- [ ] `core`: `Finding` 모델, fingerprint 생성, 근거 없는 지적 필터
-- [ ] `stack-gradle-spring`: detect / build / lint 구현
-- [ ] `llm`: `ClaudeCodeCliClient` (ProcessBuilder + JSON 파싱 + 타임아웃)
-- [ ] `adapter-github`: PR diff 수집, 변경 라인 매핑
-- [ ] `renderer-pr-comment`: 인라인 코멘트 + 요약 코멘트 갱신
+- [x] `ai-review-engine` 단일 Spring Boot 프로젝트 생성 (web-application-type: none, 4.3 참고)
+- [x] 패키지 구조(core/llm/stack/adapter/renderer) 생성 + `ArchitectureTest` 작성
+- [x] 루트에 `docs/`, `rulepack/`, `CLAUDE.md` 배치
+- [x] `core`: `.review.yml` 로딩 + 룰 병합 로직 + 단위 테스트
+- [x] `core`: `Finding` 모델, fingerprint 생성, 근거 없는 지적 필터
+- [x] `stack-gradle-spring`: detect / build / lint 구현 (+ test/coverage/mutate 2단계에서 추가)
+- [x] `llm`: `ClaudeCodeCliClient` (ProcessBuilder + JSON 파싱 + 타임아웃)
+- [x] `adapter-github`: PR diff 수집, 변경 라인 매핑
+- [x] `renderer-pr-comment`: 인라인 코멘트 + 요약 코멘트 갱신
 
 ### CI 연동
-- [ ] 샌드박스 Docker 이미지 작성
-- [ ] 파일럿 레포 1개에 `.review.yml` + PR 워크플로 적용
-- [ ] API 키는 Actions secret으로만 관리, fork PR 트리거 분리
-- [ ] 2주간 파일럿 운영 후 오탐률 측정 → 룰 튜닝
+- [x] 샌드박스 Docker 이미지 작성 — 로컬 Docker Desktop에서 빌드·실행 검증(BUILD 네트워크 차단 포함), 실제 GitHub Actions 파일럿(harrison-kook/sample-target)에서도 매 워크플로 실행마다 이미지를 새로 빌드해 검증됨
+- [x] 파일럿 레포 1개에 `.review.yml` + PR 워크플로 적용 — `harrison-kook/sample-target` PR #1에서 BUILD(네트워크 차단 빌드/린트/baseline 테스트)와 REPORT(LLM 리뷰, diff 스코프 필터, 인라인 PR 코멘트, ruleId/fingerprint 마커) 워크플로 둘 다 end-to-end 성공 확인. 이 과정에서 실제로 발견·수정한 버그: gradlew 실행 비트 누락 방어, 샌드박스 컨테이너 간 gradle 데몬/VFS 락 경합(`--no-daemon --no-watch-fs`), `workflow_run` 아티팩트 다운로드에 필요한 `actions: read` 권한 누락
+- [x] API 키는 Actions secret으로만 관리 — `ANTHROPIC_API_KEY`를 리포지토리 시크릿으로 등록, BUILD 워크플로(fork PR도 트리거되는 `pull_request`)에는 시크릿을 전혀 넘기지 않고 REPORT 워크플로(`workflow_run`, 시크릿 접근 가능)에서만 사용하도록 트리거 분리는 적용됨. 다만 **실제 fork PR로 이 분리가 의도대로 막아주는지는 아직 검증 안 됨** (동일 계정 브랜치 PR로만 테스트)
+- [ ] 2주간 파일럿 운영 후 오탐률 측정 → 룰 튜닝 — 운영 기간이 필요한 항목이라 아직 시작 전
 
 ---
 
