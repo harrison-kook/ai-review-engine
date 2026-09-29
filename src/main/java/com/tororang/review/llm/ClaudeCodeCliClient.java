@@ -40,6 +40,7 @@ public class ClaudeCodeCliClient implements LlmClient {
     private static final String TESTER_ALLOWED_TOOLS = "Read,Grep,Glob,Write";
 
     private final String claudeExecutable;
+    private final String model;
     // LLM 출력은 프롬프트를 아무리 엄격히 써도 예상 밖 필드가 섞일 수 있다(실사용 중 fingerprint를
     // 직접 채워 보낸 사례 확인). 엔진이 필요한 필드만 뽑아 쓰므로 모르는 필드는 무시한다.
     private final ObjectMapper jsonMapper = new ObjectMapper()
@@ -53,7 +54,18 @@ public class ClaudeCodeCliClient implements LlmClient {
     }
 
     public ClaudeCodeCliClient(String claudeExecutable) {
+        // 리뷰/테스트 생성은 매 PR/커밋마다 반복 호출되는 비용 민감 경로라 기본값을 opus보다
+        // 저렴한 sonnet으로 둔다. REVIEW_LLM_MODEL 환경변수로 opus/haiku 등으로 바꿀 수 있다.
+        this(claudeExecutable, firstNonBlank(System.getenv("REVIEW_LLM_MODEL"), "sonnet"));
+    }
+
+    public ClaudeCodeCliClient(String claudeExecutable, String model) {
         this.claudeExecutable = claudeExecutable;
+        this.model = model;
+    }
+
+    private static String firstNonBlank(String value, String fallback) {
+        return (value == null || value.isBlank()) ? fallback : value;
     }
 
     @Override
@@ -62,7 +74,8 @@ public class ClaudeCodeCliClient implements LlmClient {
                 claudeExecutable,
                 "-p", request.command(),
                 "--output-format", "json",
-                "--allowedTools", REVIEWER_ALLOWED_TOOLS
+                "--allowedTools", REVIEWER_ALLOWED_TOOLS,
+                "--model", model
         );
 
         ProcessOutcome outcome = ProcessExecutor.run(request.workingDirectory(), request.timeout(), command);
@@ -81,7 +94,8 @@ public class ClaudeCodeCliClient implements LlmClient {
                 claudeExecutable,
                 "-p", request.command(),
                 "--output-format", "json",
-                "--allowedTools", TESTER_ALLOWED_TOOLS
+                "--allowedTools", TESTER_ALLOWED_TOOLS,
+                "--model", model
         );
 
         ProcessOutcome outcome = ProcessExecutor.run(request.workingDirectory(), request.timeout(), command);
