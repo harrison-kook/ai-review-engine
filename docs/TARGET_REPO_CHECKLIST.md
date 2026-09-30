@@ -88,14 +88,75 @@
 - **Windows에서 만들어진 레포** — `gradlew`뿐 아니라 다른 셸 스크립트도 실행 비트가 없을 수
   있다. CRLF 개행도 종종 딸려온다 (기능엔 영향 없지만 `git diff` 노이즈가 커진다).
 
-## 5. 온보딩 순서 (권장)
+## 5. 온보딩 순서 (최초 적용 시 실제로 하는 일)
 
-1. 대상 레포를 로컬에 clone해서 위 1~4번 항목을 눈으로 확인한다 (build.gradle 위치, 플러그인
-   목록, 테스트가 외부 인프라에 의존하는지).
-2. `.review.yml` + 워크플로 2개를 추가한다 (`docker/README.md`, `templates/github-workflows/`
-   참고).
-3. `ANTHROPIC_API_KEY`(+ 필요하면 `GH_PAT`)를 대상 레포 Secrets에 등록한다.
-4. 실제 코드 변경이 있는 테스트 PR을 올려 BUILD → REPORT 워크플로가 끝까지 성공하는지
-   확인한다. 여기서 3~4번 항목의 함정이 실제로 걸리는지 드러난다.
-5. 문제 없이 통과하면 그제서야 `gate.fail_on`을 켜는 등 강제력을 올린다 (13장 미결 사항
-   결정: 파일럿 기간엔 경고만 → 데이터 쌓은 뒤 전환).
+사전 점검(1~4번 항목)을 마쳤다는 전제로, 실제로 손을 대는 순서다.
+
+### 5.1 파일 추가 (레포에 커밋할 것)
+
+대상 레포에 아래 4개를 추가한다 — 앞의 3개는 필수, 마지막은 선택:
+
+- `.review.yml` — 룰팩 버전, `profiles`, `mode`
+- `.github/workflows/review-build.yml`
+- `.github/workflows/review-report.yml`
+- `.review-rules/rules/xxx.md` (선택) — 이 레포에만 해당하는 민감한 내부 정책 규칙이
+  있을 때만. 없으면 안 만들어도 된다.
+
+`ai-review-engine`/`review-rulepack`이 이제 public이므로, 워크플로에서 이 두 레포를
+checkout할 때 `token:`은 넣지 않는다 (예전엔 `GH_PAT`가 필요했지만 지금은 불필요).
+
+### 5.2 시크릿 등록 (레포별로 1회, GitHub Secrets)
+
+`ANTHROPIC_API_KEY` 하나만 등록한다. 대화 기록에 키가 남지 않도록 파일 경유로:
+
+```bash
+# 1) 메모장 등으로 키 값을 파일에 저장 (예: ~/ant-key.txt)
+# 2) 파일에서 읽어서 등록
+gh secret set ANTHROPIC_API_KEY --repo <owner>/<repo> < ~/ant-key.txt
+# 3) 등록됐는지 확인 (값은 안 보이고 이름/시각만 나온다)
+gh secret list --repo <owner>/<repo>
+# 4) 파일 삭제
+rm ~/ant-key.txt
+```
+
+### 5.3 기본 브랜치에 커밋 + 푸시
+
+워크플로 파일은 기본 브랜치(main/master)에 있어야 GitHub이 인식한다.
+
+```bash
+git add .review.yml .github/workflows/ .review-rules/   # 있는 것만
+git commit -m "AI 리뷰 엔진 CI 연동"
+git push origin main
+```
+
+### 5.4 테스트 PR 오픈 — 여기서부터 자동으로 돈다
+
+설정 파일만 올려서는 아무것도 실행되지 않는다. **PR이 열려야** `pull_request` 이벤트로
+BUILD 워크플로가 트리거된다. 실제 코드 한 줄을 바꿔서 새 브랜치로 PR을 연다.
+
+```bash
+git checkout -b ai-review-test
+# 파일 한 줄 수정
+git commit -am "AI 리뷰 파이프라인 검증용"
+git push origin ai-review-test
+gh pr create --base main --head ai-review-test --title "..." --body "..."
+```
+
+이후는 전부 자동이다 — 사람이 수동으로 실행시키는 스텝은 없다:
+
+1. PR 오픈/업데이트 → **"AI Review - Build"** 자동 트리거 (시크릿 없이, 네트워크 차단
+   빌드/린트)
+2. build 성공 → **"AI Review - Report"**가 `workflow_run`으로 자동 이어서 트리거 (시크릿
+   사용, LLM 리뷰)
+3. 결과 확인:
+   - PR 화면의 인라인 코멘트 + 요약 코멘트
+   - Actions 탭 → 해당 실행 → **Artifacts** (jacoco 설정했으면 `jacoco-html-report`)
+   - (public 레포면) **Security → Code scanning** 탭에 SARIF
+
+여기서 1~4번 항목의 함정(Java 툴체인, 외부 인프라 의존 테스트 등)이 실제로 걸리는지
+드러난다 — BUILD가 실패하면 로그를 보고 4번 항목부터 대조한다.
+
+### 5.5 문제 없이 통과하면
+
+`gate.fail_on`을 켜는 등 강제력을 올린다 (13장 미결 사항 결정: 파일럿 기간엔 경고만 →
+데이터 쌓은 뒤 전환).
