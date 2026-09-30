@@ -46,11 +46,29 @@
 
 ## 4. 실전에서 발견한 주의사항 / 함정
 
+- **Java 툴체인 버전이 샌드박스 이미지의 JDK보다 높음** — 샌드박스는 JDK 21까지만 있다.
+  `build.gradle`이 `JavaLanguageVersion.of(26)` 등 더 높은 버전을 요구하면 Gradle이 해당
+  JDK를 자동 다운로드해야 하는데, **`settings.gradle`에 `foojay-resolver-convention` 플러그인이
+  없으면** "Toolchain download repositories have not been configured"로 네트워크 상태와
+  무관하게 즉시 실패한다 (`tororang-admin`에서 실제로 발생, JDK 26 요구).
+  → 대상 레포의 `settings.gradle`에 추가:
+  ```gradle
+  plugins {
+      id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+  }
+  ```
+  **버전 호환성 주의**: 이 플러그인의 오래된 버전(`0.8.0`, `0.9.0` 등)은 최신 Gradle(9.5.1
+  기준 확인)에서 `Class org.gradle.jvm.toolchain.JvmVendorSpec does not have member field
+  'IBM_SEMERU'`로 플러그인 자체가 안 걸린다 — `1.0.0`에서 해결됨(`tororang-admin`에서
+  실제 재현·확인). 이 다운로드는 네트워크가 열려 있는 "Warm Gradle cache" 단계에서 이뤄지고
+  `~/.gradle/jdks/`에 캐시되어 이후 네트워크 차단 단계에서 재사용된다.
 - **외부 인프라(DB/MQ/Redis 등) 의존 테스트** — 샌드박스는 `docker-compose`를 띄우지 않고
   `--network none`으로 돈다. 테스트가 DB는 H2로 격리해도 **MQ(RabbitMQ 등)까지 격리 안
-  돼 있으면** `@SpringBootTest`류가 전체 컨텍스트를 띄우다 연결 실패로 죽을 수 있다
-  (`tororang-admin`에서 발견: DB는 H2로 분리됐지만 `application.yml`의 RabbitMQ 설정이
-  `localhost:5672`를 그대로 가리킴 — 실제로 깨지는지는 라이브로 확인 필요).
+  돼 있으면** `@SpringBootTest`류가 전체 컨텍스트를 띄우다 연결 실패로 죽을 위험이 있다.
+  `tororang-admin`(DB는 H2, RabbitMQ는 `application.yml`에 `localhost:5672`로 남아있는
+  구성)으로 실제 BUILD 단계를 라이브 검증한 결과 **이번 케이스에서는 실패하지 않았다** —
+  다만 이건 이 레포의 특정 테스트 구성에 한정된 결과이니, 다른 레포에 적용할 때 AMQP
+  auto-configuration을 실제로 예열/사용하는 테스트가 있다면 별도로 확인해야 한다.
   → 온보딩 전에 테스트가 슬라이스 테스트로 분리돼 있는지, 임베디드/모킹으로 외부 인프라를
   대체하는지 확인한다.
 - **Gradle 데몬/VFS 락 경합** — 같은 `~/.gradle`을 공유하는 연속된 컨테이너 실행(캐시 워밍
