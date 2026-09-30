@@ -277,7 +277,14 @@ gate:
   fail_on: HIGH             # HIGH 위반 시 체크 실패 (선택)
 ```
 
-**룰 병합 순서**: common → 스택 → 도메인 → team → 레포 `overrides` (뒤가 앞을 덮어씀)
+**룰 병합 순서**: common → 스택 → 도메인 → team → **레포 로컬**(`<레포>/.review-rules/`) →
+레포 `overrides` (뒤가 앞을 덮어씀)
+
+레포 로컬 규칙은 룰팩 저장소 밖, 대상 레포 자체 안에 두는 규칙이다 (`RuleMerger`,
+`RulepackInjector` 구현, 3단계에서 review-rulepack이 public으로 전환되며 필요해짐). 그
+레포에만 해당하고 여러 레포와 공유할 필요 없는 민감한 내부 정책에 쓴다 — 대상 레포 자체가
+private이면 별도 인프라 없이 그 레포의 접근 권한이 곧 규칙의 접근 권한이 된다. 형식과
+사용법은 `review-rulepack`의 README "특정 레포에만 해당하는 민감한 규칙" 절 참고.
 
 ---
 

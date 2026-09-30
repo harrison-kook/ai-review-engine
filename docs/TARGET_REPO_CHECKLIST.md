@@ -30,11 +30,13 @@
 | `.review.yml` | 룰팩 버전, `profiles`, `mode`(diff/full), `gate` 등 |
 | `.github/workflows/review-build.yml` | PR마다 트리거, 시크릿 없이 네트워크 차단 빌드/린트 |
 | `.github/workflows/review-report.yml` | build 성공 후 `workflow_run`으로 트리거, LLM 리뷰 + PR 코멘트 |
+| `.review-rules/` (선택) | 이 레포에만 해당하는 민감한 내부 정책 규칙. `review-rulepack`(public)에 두지 않고 레포 안에 직접 둔다 — 설정 불필요, 있으면 자동 병합. `review-rulepack` README "레포 로컬 규칙" 절 참고. |
 
 - **GitHub Secrets는 레포별로 개별 등록해야 한다** — 다른 레포에 등록해둔 걸 재사용할 수 없다.
   - `ANTHROPIC_API_KEY` (LLM 호출)
   - `GH_PAT` — `ai-review-engine`/`review-rulepack`이 **private**일 때만 필요
-    (checkout 시 기본 `GITHUB_TOKEN`은 다른 레포에 접근 못 함). 둘 다 public이면 불필요.
+    (checkout 시 기본 `GITHUB_TOKEN`은 다른 레포에 접근 못 함). 둘 다 public이면 불필요
+    (실제로 2026-09-30부로 둘 다 public 전환됨).
 
 ## 3. 선택 기능을 쓰려면 대상 레포에 추가로 필요한 것
 
