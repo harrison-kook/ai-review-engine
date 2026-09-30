@@ -26,17 +26,24 @@ public final class RuleCatalog {
     private static final Pattern SEVERITY_LINE = Pattern.compile("^-\\s*심각도:\\s*(HIGH|MEDIUM|LOW|INFO)\\s*$");
 
     public List<RuleDefinition> scanProfile(Path rulepackDir, String profile) {
-        Path profileDir = rulepackDir.resolve("rules").resolve(profile);
-        if (!Files.isDirectory(profileDir)) {
+        return scanDirectory(rulepackDir.resolve("rules").resolve(profile));
+    }
+
+    /**
+     * 프로필 구분 없이 주어진 디렉터리를 그대로(재귀적으로) 스캔한다. 대상 레포 안에 두는
+     * 레포 로컬 규칙(`.review-rules/rules/`)처럼 profile 개념이 없는 소스에 쓴다.
+     */
+    public List<RuleDefinition> scanDirectory(Path rulesDir) {
+        if (!Files.isDirectory(rulesDir)) {
             return List.of();
         }
         List<RuleDefinition> result = new ArrayList<>();
-        try (Stream<Path> paths = Files.walk(profileDir)) {
+        try (Stream<Path> paths = Files.walk(rulesDir)) {
             paths.filter(p -> p.toString().endsWith(".md"))
                     .sorted()
                     .forEach(file -> result.addAll(parseFile(file)));
         } catch (IOException e) {
-            throw new UncheckedIOException("failed to scan rule profile: " + profileDir, e);
+            throw new UncheckedIOException("failed to scan rule directory: " + rulesDir, e);
         }
         return result;
     }

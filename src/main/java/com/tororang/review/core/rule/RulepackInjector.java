@@ -16,6 +16,9 @@ import java.util.stream.Stream;
  */
 public final class RulepackInjector {
 
+    /** 레포 로컬 규칙(레포 안 {@code .review-rules/})을 주입할 때 쓰는 고정 프로필명. */
+    private static final String LOCAL_RULES_PROFILE = "_local";
+
     public void inject(Path rulepackDir, Path repoRoot, List<String> profiles) {
         Path claudeDir = repoRoot.resolve(".claude");
         copyFileIfExists(rulepackDir.resolve("CLAUDE.md"), claudeDir.resolve("CLAUDE.md"));
@@ -26,6 +29,12 @@ public final class RulepackInjector {
             copyDirIfExists(rulepackDir.resolve("rules").resolve(profile), claudeDir.resolve("rulepack/rules").resolve(profile));
             copyDirIfExists(rulepackDir.resolve("testcases").resolve(profile), claudeDir.resolve("rulepack/testcases").resolve(profile));
         }
+
+        // 레포 로컬 규칙: 대상 레포 자체 안의 .review-rules/ — 그 레포 밖으로 절대 나가지 않고,
+        // 레포 자체의 접근 권한이 곧 규칙의 접근 권한이 된다 (RuleMerger.LOCAL_RULES_DIR_NAME 참고).
+        Path localRulesDir = repoRoot.resolve(RuleMerger.LOCAL_RULES_DIR_NAME);
+        copyDirIfExists(localRulesDir.resolve("rules"), claudeDir.resolve("rulepack/rules").resolve(LOCAL_RULES_PROFILE));
+        copyDirIfExists(localRulesDir.resolve("testcases"), claudeDir.resolve("rulepack/testcases").resolve(LOCAL_RULES_PROFILE));
     }
 
     private void copyFileIfExists(Path source, Path target) {

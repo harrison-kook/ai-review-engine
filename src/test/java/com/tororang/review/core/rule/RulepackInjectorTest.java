@@ -49,6 +49,22 @@ class RulepackInjectorTest {
     }
 
     @Test
+    void copiesRepoLocalRulesFromReviewRulesDir(@TempDir Path root) throws IOException {
+        Path rulepackDir = root.resolve("rulepack");
+        Path repoRoot = root.resolve("repo");
+        Files.createDirectories(rulepackDir);
+        Files.createDirectories(repoRoot.resolve(".review-rules/rules"));
+        Files.writeString(repoRoot.resolve(".review-rules/rules/internal.md"), "INTERNAL-001");
+        Files.createDirectories(repoRoot.resolve(".review-rules/testcases"));
+        Files.writeString(repoRoot.resolve(".review-rules/testcases/internal.md"), "TC-INTERNAL-001");
+
+        injector.inject(rulepackDir, repoRoot, List.of("common"));
+
+        assertThat(repoRoot.resolve(".claude/rulepack/rules/_local/internal.md")).exists().content().isEqualTo("INTERNAL-001");
+        assertThat(repoRoot.resolve(".claude/rulepack/testcases/_local/internal.md")).exists().content().isEqualTo("TC-INTERNAL-001");
+    }
+
+    @Test
     void doesNothingWhenRulepackDirMissing(@TempDir Path root) throws IOException {
         Path repoRoot = root.resolve("repo");
         Files.createDirectories(repoRoot);

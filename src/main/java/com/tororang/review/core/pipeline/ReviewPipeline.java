@@ -102,7 +102,7 @@ public class ReviewPipeline {
         ReviewConfig config = configLoader.load(command.configPath());
 
         rulepackInjector.inject(command.rulepackDir(), command.repoRoot(), config.profiles());
-        List<RuleDefinition> activeRules = ruleMerger.merge(command.rulepackDir(), config);
+        List<RuleDefinition> activeRules = ruleMerger.merge(command.rulepackDir(), command.repoRoot(), config);
         log.info("active rules after merge: {}", activeRules.size());
 
         List<Finding> deterministicFindings = FindingsIO.read(command.findingsPath());

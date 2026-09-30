@@ -22,7 +22,10 @@ class RuleMergerTest {
     private final RuleMerger merger = new RuleMerger();
 
     @Test
-    void mergesProfilesInOrderAndAppliesOverrides(@TempDir Path rulepackDir) throws IOException {
+    void mergesProfilesInOrderAndAppliesOverrides(@TempDir Path root) throws IOException {
+        Path rulepackDir = root.resolve("rulepack");
+        Path repoRoot = root.resolve("repo");
+        Files.createDirectories(repoRoot);
         writeRule(rulepackDir, "common", "security.md", "SEC-001", Severity.HIGH);
         writeRule(rulepackDir, "java-spring", "jpa.md", "JPA-003", Severity.HIGH);
         writeRule(rulepackDir, "team", "our-team.md", "STYLE-010", Severity.LOW);
@@ -38,12 +41,51 @@ class RuleMergerTest {
                 Gate.DISABLED
         );
 
-        List<RuleDefinition> merged = merger.merge(rulepackDir, config);
+        List<RuleDefinition> merged = merger.merge(rulepackDir, repoRoot, config);
 
         assertThat(merged).extracting(RuleDefinition::ruleId).containsExactlyInAnyOrder("SEC-001", "JPA-003");
         assertThat(merged).filteredOn(r -> r.ruleId().equals("JPA-003"))
                 .extracting(RuleDefinition::severity)
                 .containsExactly(Severity.MEDIUM);
+    }
+
+    @Test
+    void repoLocalRulesAreAddedAndOverrideSameIdFromRulepack(@TempDir Path root) throws IOException {
+        Path rulepackDir = root.resolve("rulepack");
+        Path repoRoot = root.resolve("repo");
+        writeRule(rulepackDir, "common", "security.md", "SEC-001", Severity.HIGH);
+
+        Path localRules = repoRoot.resolve(".review-rules/rules");
+        Files.createDirectories(localRules);
+        // repo-local이 마지막 레이어이므로 같은 ID를 다시 정의하면 심각도를 덮어쓴다.
+        Files.writeString(localRules.resolve("internal.md"), """
+                ## SEC-001: 내부 정책으로 완화
+                - 심각도: LOW
+                - 검사 방식: LLM
+
+                ## INTERNAL-001: 회사 내부 전용 규칙
+                - 심각도: MEDIUM
+                - 검사 방식: LLM
+                """);
+
+        ReviewConfig config = new ReviewConfig(
+                "our-org/review-rulepack@v0.1.0",
+                List.of("common"),
+                ReviewMode.DIFF,
+                List.of(),
+                List.of(),
+                Overrides.EMPTY,
+                Limits.EMPTY,
+                Gate.DISABLED
+        );
+
+        List<RuleDefinition> merged = merger.merge(rulepackDir, repoRoot, config);
+
+        assertThat(merged).extracting(RuleDefinition::ruleId)
+                .containsExactlyInAnyOrder("SEC-001", "INTERNAL-001");
+        assertThat(merged).filteredOn(r -> r.ruleId().equals("SEC-001"))
+                .extracting(RuleDefinition::severity)
+                .containsExactly(Severity.LOW);
     }
 
     private void writeRule(Path rulepackDir, String profile, String fileName, String ruleId, Severity severity) throws IOException {
