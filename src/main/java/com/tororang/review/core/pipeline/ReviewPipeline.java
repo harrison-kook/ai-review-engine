@@ -76,25 +76,38 @@ public class ReviewPipeline {
 
     public void runBuildPhase(ReviewCommand command) {
         Workspace workspace = new Workspace(command.repoRoot());
-        StackAdapter stackAdapter = detectStackAdapter(command.repoRoot());
-        log.info("detected stack adapter: {}", stackAdapter.id());
+        List<StackAdapter> detectedAdapters = detectStackAdapters(command.repoRoot());
+        log.info("detected stack adapters: {}", detectedAdapters.stream().map(StackAdapter::id).toList());
 
-        StepResult buildResult = stackAdapter.build(workspace);
-        if (!buildResult.success()) {
-            throw new BuildFailedException("build failed (exit=" + buildResult.exitCode() + "):\n" + buildResult.output());
+        List<Finding> deterministicFindings = new ArrayList<>();
+        TestResult baselineTestResult = null;
+        CoverageReport baselineCoverage = null;
+
+        for (StackAdapter stackAdapter : detectedAdapters) {
+            StepResult buildResult = stackAdapter.build(workspace);
+            if (!buildResult.success()) {
+                throw new BuildFailedException("build failed for stack '" + stackAdapter.id() + "' (exit="
+                        + buildResult.exitCode() + "):\n" + buildResult.output());
+            }
+
+            deterministicFindings.addAll(stackAdapter.lint(workspace));
+
+            // 커버리지 게이트의 baseline: tester가 테스트를 추가하기 전, 기존 테스트만으로 측정한다.
+            // 기존 테스트가 실패하더라도 빌드 자체를 막지는 않는다 — 대상 레포의 기존 상태 문제이지
+            // 우리가 추가한 테스트와는 무관하다.
+            TestResult stackTestResult = stackAdapter.test(workspace);
+            baselineTestResult = baselineTestResult == null
+                    ? stackTestResult : mergeTestResults(baselineTestResult, stackTestResult);
+
+            CoverageReport stackCoverage = stackAdapter.coverage(workspace);
+            baselineCoverage = baselineCoverage == null
+                    ? stackCoverage : mergeCoverageReports(baselineCoverage, stackCoverage);
         }
 
-        List<Finding> deterministicFindings = stackAdapter.lint(workspace);
         log.info("deterministic findings: {}", deterministicFindings.size());
-
         FindingsIO.write(command.findingsPath(), deterministicFindings);
 
-        // 커버리지 게이트의 baseline: tester가 테스트를 추가하기 전, 기존 테스트만으로 측정한다.
-        // 기존 테스트가 실패하더라도 빌드 자체를 막지는 않는다 — 대상 레포의 기존 상태 문제이지
-        // 우리가 추가한 테스트와는 무관하다.
-        TestResult baselineTestResult = stackAdapter.test(workspace);
         log.info("baseline tests: {}건 (실패 {}건)", baselineTestResult.totalTests(), baselineTestResult.failedTests());
-        CoverageReport baselineCoverage = stackAdapter.coverage(workspace);
         JsonIO.write(command.baselineCoveragePath(), baselineCoverage);
     }
 
@@ -143,24 +156,35 @@ public class ReviewPipeline {
         List<GeneratedTestCase> mappings = JsonListIO.read(command.genTestPath(), GeneratedTestCase.class);
 
         Workspace workspace = new Workspace(command.repoRoot());
-        StackAdapter stackAdapter = detectStackAdapter(command.repoRoot());
-        TestResult testResult = stackAdapter.test(workspace);
+        List<StackAdapter> detectedAdapters = detectStackAdapters(command.repoRoot());
+
+        TestResult testResult = null;
+        CoverageReport afterCoverage = null;
+        MutationReport mutationReport = null;
+        for (StackAdapter stackAdapter : detectedAdapters) {
+            TestResult stackTestResult = stackAdapter.test(workspace);
+            testResult = testResult == null ? stackTestResult : mergeTestResults(testResult, stackTestResult);
+
+            CoverageReport stackCoverage = stackAdapter.coverage(workspace);
+            afterCoverage = afterCoverage == null ? stackCoverage : mergeCoverageReports(afterCoverage, stackCoverage);
+
+            // PIT은 느리다 — .review.yml이 뮤테이션 게이트를 명시적으로 켰을 때만 돌린다.
+            MutationReport stackMutationReport = config.gate().hasMutationThreshold()
+                    ? stackAdapter.mutate(workspace)
+                    : MutationReport.EMPTY;
+            mutationReport = mutationReport == null ? stackMutationReport : mergeMutationReports(mutationReport, stackMutationReport);
+        }
         log.info("실행된 테스트: {}건 (실패 {}건)", testResult.totalTests(), testResult.failedTests());
 
         List<TestCaseReport> reports = correlate(catalog, mappings, testResult.cases());
         JsonListIO.write(command.testCaseReportPath(), reports);
 
-        CoverageReport afterCoverage = stackAdapter.coverage(workspace);
         CoverageReport baselineCoverage = JsonIO.read(command.baselineCoveragePath(), CoverageReport.class, CoverageReport.EMPTY);
         CoverageDelta coverageDelta = CoverageDelta.of(baselineCoverage, afterCoverage);
         JsonIO.write(command.coverageDeltaPath(), coverageDelta);
         log.info("커버리지: {}% -> {}% (Δ{}pp)",
                 baselineCoverage.lineCoveragePercent(), afterCoverage.lineCoveragePercent(), coverageDelta.deltaPercentagePoints());
 
-        // PIT은 느리다 — .review.yml이 뮤테이션 게이트를 명시적으로 켰을 때만 돌린다.
-        MutationReport mutationReport = config.gate().hasMutationThreshold()
-                ? stackAdapter.mutate(workspace)
-                : MutationReport.EMPTY;
         JsonIO.write(command.mutationReportPath(), mutationReport);
         if (config.gate().hasMutationThreshold()) {
             log.info("뮤테이션 스코어: {}% ({}/{} killed)",
@@ -220,10 +244,41 @@ public class ReviewPipeline {
                 testRunResult.coverageDelta(), testRunResult.mutationReport());
     }
 
-    private StackAdapter detectStackAdapter(Path repoRoot) {
-        return stackAdapters.stream()
+    /**
+     * 모노레포 지원: 레포 루트에 여러 스택이 동시에 감지될 수 있다(예: 루트의 Java/Spring +
+     * frontend/ 서브디렉터리의 Node.js). detect()가 true인 어댑터를 전부 돌려서 각자의
+     * build/lint/test/coverage 결과를 모은다 (findFirst가 아니라 filter 전체).
+     */
+    private List<StackAdapter> detectStackAdapters(Path repoRoot) {
+        List<StackAdapter> detected = stackAdapters.stream()
                 .filter(adapter -> adapter.detect(repoRoot))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("no stack adapter detected for " + repoRoot));
+                .toList();
+        if (detected.isEmpty()) {
+            throw new IllegalStateException("no stack adapter detected for " + repoRoot);
+        }
+        return detected;
+    }
+
+    private TestResult mergeTestResults(TestResult a, TestResult b) {
+        List<TestCaseResult> cases = new ArrayList<>(a.cases());
+        cases.addAll(b.cases());
+        String output = a.output() + "\n" + b.output();
+        return new TestResult(a.success() && b.success(), a.totalTests() + b.totalTests(),
+                a.failedTests() + b.failedTests(), cases, output);
+    }
+
+    private CoverageReport mergeCoverageReports(CoverageReport a, CoverageReport b) {
+        int coveredLines = a.coveredLines() + b.coveredLines();
+        int missedLines = a.missedLines() + b.missedLines();
+        int totalLines = coveredLines + missedLines;
+        double percent = totalLines == 0 ? 0.0 : coveredLines * 100.0 / totalLines;
+        return new CoverageReport(percent, coveredLines, missedLines);
+    }
+
+    private MutationReport mergeMutationReports(MutationReport a, MutationReport b) {
+        int totalMutations = a.totalMutations() + b.totalMutations();
+        int killedMutations = a.killedMutations() + b.killedMutations();
+        double percent = totalMutations == 0 ? 0.0 : killedMutations * 100.0 / totalMutations;
+        return new MutationReport(percent, totalMutations, killedMutations);
     }
 }

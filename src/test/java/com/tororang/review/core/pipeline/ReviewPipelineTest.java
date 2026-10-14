@@ -176,6 +176,49 @@ class ReviewPipelineTest {
     }
 
     @Test
+    void buildPhaseAggregatesFindingsAndCoverageFromMultipleDetectedAdapters(@TempDir Path dir) {
+        // 모노레포 시나리오: Gradle(루트) + Node(frontend/) 어댑터가 동시에 detect()==true인 경우.
+        FakeStackAdapter gradleAdapter = new FakeStackAdapter();
+        gradleAdapter.lintFindings = List.of(finding("SEC-001", "fp-1"));
+        gradleAdapter.coverageResults = List.of(new CoverageReport(50.0, 50, 50));
+
+        FakeStackAdapter nodeAdapter = new FakeStackAdapter();
+        nodeAdapter.lintFindings = List.of(finding("REACT-001", "fp-2"));
+        nodeAdapter.coverageResults = List.of(CoverageReport.EMPTY); // Node 어댑터는 coverage 스텁
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(gradleAdapter, nodeAdapter), new FakeLlmClient());
+        Path findingsPath = dir.resolve("build/review-findings.json");
+        ReviewCommand command = command(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
+                findingsPath, ReviewCommand.Phase.BUILD);
+
+        pipeline.runBuildPhase(command);
+
+        assertThat(FindingsIO.read(findingsPath)).extracting(Finding::ruleId)
+                .containsExactlyInAnyOrder("SEC-001", "REACT-001");
+
+        CoverageReport baseline = JsonIO.read(command.baselineCoveragePath(), CoverageReport.class, null);
+        // 50/50 (gradle) + 0/0 (node EMPTY) 합산 = 여전히 50.0%
+        assertThat(baseline.lineCoveragePercent()).isEqualTo(50.0);
+        assertThat(baseline.coveredLines()).isEqualTo(50);
+        assertThat(baseline.missedLines()).isEqualTo(50);
+    }
+
+    @Test
+    void buildPhaseThrowsWhenAnyDetectedAdapterBuildFails(@TempDir Path dir) {
+        FakeStackAdapter okAdapter = new FakeStackAdapter();
+        FakeStackAdapter failingAdapter = new FakeStackAdapter();
+        failingAdapter.buildResult = new StepResult(false, 1, "eslint config missing");
+
+        ReviewPipeline pipeline = new ReviewPipeline(List.of(okAdapter, failingAdapter), new FakeLlmClient());
+        ReviewCommand command = command(dir, dir.resolve("rulepack"), dir.resolve(".review.yml"),
+                dir.resolve("build/review-findings.json"), ReviewCommand.Phase.BUILD);
+
+        assertThatThrownBy(() -> pipeline.runBuildPhase(command))
+                .isInstanceOf(BuildFailedException.class)
+                .hasMessageContaining("eslint config missing");
+    }
+
+    @Test
     void testRunPhaseComputesCoverageDeltaAgainstBaseline(@TempDir Path dir) throws IOException {
         writeConfig(dir);
         Path rulepackDir = dir.resolve("rulepack");
