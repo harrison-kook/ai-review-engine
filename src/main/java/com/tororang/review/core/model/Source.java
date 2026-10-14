@@ -5,5 +5,6 @@ public enum Source {
     CHECKSTYLE,
     PMD,
     SPOTBUGS,
+    ESLINT,
     TEST
 }

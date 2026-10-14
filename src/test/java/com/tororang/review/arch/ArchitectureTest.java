@@ -21,6 +21,8 @@ class ArchitectureTest {
                 "com.tororang.review.llm..",
                 "com.tororang.review.stack.gradlespring",
                 "com.tororang.review.stack.gradlespring..",
+                "com.tororang.review.stack.node",
+                "com.tororang.review.stack.node..",
                 "com.tororang.review.adapter..",
                 "com.tororang.review.renderer.prcomment",
                 "com.tororang.review.renderer.prcomment..",
