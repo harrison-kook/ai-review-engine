@@ -6,10 +6,24 @@
 
 ## 1. 필수 요구사항 (지금 지원하는 스택)
 
-- **Gradle + Spring Boot 프로젝트**여야 한다 — 현재 스택 어댑터가 `gradle-spring` 하나뿐이다
-  (`StackAdapter.detect()`가 `build.gradle` 존재로 판별). Maven/Node 등은 아직 미지원
-  (설계서 4단계, 필요 시 착수).
-- **`build.gradle`이 레포 루트에 있어야 한다.** 서브폴더에 있으면(예: `freepoint/` 케이스처럼
+- **Gradle + Spring Boot 프로젝트** 또는 **Node.js 프로젝트**(React/Next.js/Vue.js 포함)여야
+  한다 — 현재 스택 어댑터는 `gradle-spring`(`StackAdapter.detect()`가 `build.gradle` 존재로
+  판별)과 `node`(`package.json` 존재로 판별, 2026-10-14 추가) 둘뿐이다. Maven 등 다른 JVM
+  빌드 도구는 아직 미지원 (설계서 4단계, 필요 시 착수).
+  - **`node` 어댑터는 현재 ESLint 기반 소스 리뷰(lint)까지만 지원한다.** 프레임워크(React/
+    Next.js/Vue.js)를 구분하지 않고 대상 레포에 이미 설정된 ESLint를 그대로 실행한다.
+    test/coverage/mutation은 Jest/Vitest/Istanbul/Stryker 연동 전까지 스텁이라 **항상
+    0건/0%로 처리된다** — 커버리지·뮤테이션 게이트를 Node 레포에 걸어도 의미가 없다.
+  - **모노레포(루트 Java/Spring + 서브디렉터리 Node.js 등)도 지원한다.** `ReviewPipeline`이
+    레포에서 `detect()`가 true인 모든 StackAdapter를 함께 돌려 build/lint/test/coverage
+    결과를 합산한다(첫 매칭만 쓰던 이전 동작에서 변경됨). `node` 어댑터는 레포 루트에
+    `package.json`이 없으면 바로 아래 서브디렉터리(깊이 1, 숨김 디렉터리 제외)를 한 번 더
+    찾는다 — 후보가 여럿이면(예: `frontend/`와 `admin-frontend/`가 둘 다 있음) 이름 순으로
+    첫 번째만 쓰고 경고를 남긴다(다중 프론트엔드·그 이상 깊은 구조는 아직 미지원). 실제
+    모노레포(marketplace) 구조가 근거로 추가됐으나, **아직 라이브 파일럿으로 end-to-end
+    검증되지는 않았다.**
+- **`build.gradle`이 레포 루트에 있어야 한다** (Gradle 어댑터는 서브디렉터리를 찾지 않는다 —
+  위 깊이-1 탐색은 `node` 어댑터에만 있음). 서브폴더에 있으면(예: `freepoint/` 케이스처럼
   레포 루트 밑에 프로젝트 폴더가 한 번 더 있는 구조) 스택 감지가 실패한다. 이 경우
   워크플로에서 레포 전체가 아니라 **실제 프로젝트 루트만 `/workspace`로 마운트**하고,
   `.review.yml`도 그 안에 둬야 한다.
@@ -24,6 +38,11 @@
   대상 레포 쪽에서 따로 고칠 필요 없다.
 
 ## 2. CI 연동에 필요한 파일 (레포마다 추가)
+
+아래 파일들은 대상 레포에 이미 있는 CI/CD 워크플로(예: `ci.yml`, `frontend-ci.yml`,
+`deploy.yml` 등 자체 빌드·테스트·배포 파이프라인)와 **독립적으로 추가**되는 파일이다.
+워크플로 이름과 트리거가 겹치지 않으면 같은 PR에서 기존 워크플로와 나란히(병렬로) 실행되며,
+서로 수정하거나 대체할 필요는 없다.
 
 | 파일 | 용도 |
 |---|---|
@@ -42,9 +61,10 @@
 
 | 기능 | 대상 레포에 필요한 설정 |
 |---|---|
-| 결정적 린트(Checkstyle/PMD/SpotBugs) | 해당 Gradle 플러그인이 `build.gradle`에 있어야 결과가 나온다. 없으면 에러 없이 그냥 0건. |
-| 커버리지 게이트(`gate.min_coverage_delta`) | `jacoco` 플러그인 + **XML 리포트 명시적으로 켜야 함** (기본은 HTML만): `tasks.named('jacocoTestReport') { reports { xml.required = true } }`. 안 켜면 항상 0%로 조용히 폴백(에러 없음 — 설정 빠뜨렸는지 직접 확인해야 함). |
-| 뮤테이션 게이트(`gate.min_mutation_score`) | PIT Gradle 플러그인(`info.solidsoft.gradle.pitest`) 필요. 느려서 게이트 설정했을 때만 실행됨. |
+| 결정적 린트 — Gradle(Checkstyle/PMD/SpotBugs) | 해당 Gradle 플러그인이 `build.gradle`에 있어야 결과가 나온다. 없으면 에러 없이 그냥 0건. |
+| 결정적 린트 — Node(ESLint) | 대상 레포에 ESLint 설정(`.eslintrc*`/`eslint.config.*`)과 devDependency가 있어야 한다. `npx eslint .`를 그대로 실행하므로 설정이 없으면 에러 없이 그냥 0건. |
+| 커버리지 게이트(`gate.min_coverage_delta`) | `jacoco` 플러그인 + **XML 리포트 명시적으로 켜야 함** (기본은 HTML만): `tasks.named('jacocoTestReport') { reports { xml.required = true } }`. 안 켜면 항상 0%로 조용히 폴백(에러 없음 — 설정 빠뜨렸는지 직접 확인해야 함). **Node 레포에는 아직 적용 안 됨** — `node` 어댑터의 `coverage()`는 항상 빈 결과를 반환한다. |
+| 뮤테이션 게이트(`gate.min_mutation_score`) | PIT Gradle 플러그인(`info.solidsoft.gradle.pitest`) 필요. 느려서 게이트 설정했을 때만 실행됨. **Node 레포에는 아직 적용 안 됨** — `node` 어댑터의 `mutate()`는 항상 빈 결과를 반환한다. |
 
 ## 4. 실전에서 발견한 주의사항 / 함정
 

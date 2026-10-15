@@ -120,6 +120,7 @@ ai-review-engine/
 ├── core/                     # 파이프라인, 설정 로딩, 룰 병합, Findings 모델
 ├── llm/                      # LlmClient 인터페이스 + 구현체
 ├── stack-gradle-spring/      # 첫 번째 스택 어댑터
+├── stack-node/               # 두 번째 스택 어댑터 (ESLint 기반 lint, 모노레포 서브디렉터리 지원)
 ├── adapter-github/           # PR diff 수집, 코멘트 작성
 ├── adapter-cli/              # (3단계) 로컬/외부 레포 실행
 ├── renderer-pr-comment/
@@ -165,7 +166,7 @@ public class ReviewRunner implements ApplicationRunner {
 com.example.review
 ├── core          # 파이프라인, 설정 로딩, 룰 병합, Finding 모델
 ├── llm           # LlmClient, ClaudeCodeCliClient
-├── stack         # StackAdapter, gradlespring
+├── stack         # StackAdapter, gradlespring, node
 ├── adapter       # github, cli
 └── renderer      # prcomment, markdown, sarif
 ```
@@ -387,14 +388,22 @@ SARIF 출력은 GitHub Code Scanning 탭에 업로드할 수 있어 범용성이
 | 3 | 오탐 피드백 수집, 룰 튜닝, SARIF 출력, Java SDK 전환 검토 | CLI 어댑터 + full 모드 |
 | 4 | 필요 시 다른 스택 어댑터, 외부 레포 분석, 대시보드(Spring Boot) | — |
 
-**4단계 현황 (검토 완료):**
+**4단계 현황:**
 - **외부 레포 분석(full 모드)** — 이미 구현돼 있다. `mode: full`이면 diff 스코프 필터를
   적용하지 않고 `include`/`exclude`에 걸리는 전체 소스를 리뷰한다 (`ReviewRunner`가
   `ReviewMode.DIFF`일 때만 diff 스코프를 적용하는 구조라, `full`은 1단계부터 이미 동작함).
-- **다른 스택 어댑터(Maven 등) / 대시보드** — **보류.** 둘 다 "필요 시"라는 조건부 항목이고
-  지금은 실제로 필요한 대상 레포(다른 빌드 스택)나 대시보드를 볼 사용자가 없다. 구체적 수요
-  없이 만들면 검증 못 하는 추측성 코드가 될 위험이 커서, 실제 필요가 생길 때(다른 스택을 쓰는
-  파일럿 레포가 생기거나, PR을 넘어선 추이를 봐야 하는 시점) 다시 착수한다.
+- **다른 스택 어댑터 — 일부 착수함 (2026-10-14).** 실제로 필요한 대상 레포(marketplace,
+  루트 Java/Spring + `frontend/` 서브디렉터리 Node.js 구조)가 생겨서 `NodeStackAdapter`를
+  추가했다. `package.json` 존재로 감지하며(React/Next.js/Vue.js 포함, 프레임워크 구분 없이
+  대상 레포에 이미 설정된 ESLint를 그대로 실행), 레포 루트에 `package.json`이 없으면 바로
+  아래 서브디렉터리(깊이 1)까지 한 번 더 찾는다. **범위는 소스 리뷰(lint)로 한정** —
+  test()/coverage()/mutate()는 Jest/Vitest/Istanbul/Stryker 연동 전까지 스텁(NONE/EMPTY)이다.
+  같은 변경으로 **모노레포 지원**도 들어갔다: `ReviewPipeline`이 더 이상 첫 번째로 매칭되는
+  StackAdapter만 쓰지 않고, `detect()`가 true인 어댑터를 전부 돌려 build/lint/test/coverage/
+  mutation 결과를 합산한다. Maven 등 다른 JVM 빌드 도구는 여전히 미지원 — 그 스택을 쓰는
+  파일럿 레포가 생기면 같은 방식으로 착수한다.
+- **대시보드** — **보류.** "필요 시"라는 조건부 항목이고 지금은 대시보드를 볼 사용자가 없다.
+  PR을 넘어선 추이 분석이 필요해지는 시점에 다시 착수한다.
 
 ---
 
