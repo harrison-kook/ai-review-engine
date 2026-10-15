@@ -5,6 +5,7 @@ import com.tororang.review.core.config.ReviewConfigLoader;
 import com.tororang.review.core.llm.GenTestStatus;
 import com.tororang.review.core.llm.GeneratedTestCase;
 import com.tororang.review.core.llm.LlmClient;
+import com.tororang.review.core.llm.LlmUsage;
 import com.tororang.review.core.llm.ReviewRequest;
 import com.tororang.review.core.llm.ReviewResult;
 import com.tororang.review.core.llm.TestGenRequest;
@@ -29,6 +30,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -120,9 +122,13 @@ public class ReviewPipeline {
 
         List<Finding> deterministicFindings = FindingsIO.read(command.findingsPath());
 
-        ReviewResult llmResult = llmClient.review(new ReviewRequest(command.repoRoot()));
+        ReviewRequest reviewRequest = new ReviewRequest(command.repoRoot(), "/review", Duration.ofMinutes(5),
+                activeRules, config.mode(), command.diffBase());
+        ReviewResult llmResult = llmClient.review(reviewRequest);
         List<Finding> llmFindings = FindingsFilter.filter(llmResult.candidates());
         log.info("llm findings after filter: {}", llmFindings.size());
+
+        JsonIO.write(command.llmUsagePath(), llmResult.usage());
 
         List<Finding> allFindings = new ArrayList<>(deterministicFindings);
         allFindings.addAll(llmFindings);

@@ -15,6 +15,7 @@ import com.tororang.review.core.adapter.RuleFeedbackSummary;
 import com.tororang.review.core.config.Gate;
 import com.tororang.review.core.config.ReviewConfigLoader;
 import com.tororang.review.core.config.ReviewMode;
+import com.tororang.review.core.llm.LlmUsage;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.pipeline.BuildFailedException;
 import com.tororang.review.core.pipeline.CoverageDelta;
@@ -24,11 +25,14 @@ import com.tororang.review.core.pipeline.JsonListIO;
 import com.tororang.review.core.pipeline.PipelineResult;
 import com.tororang.review.core.pipeline.ReviewCommand;
 import com.tororang.review.core.pipeline.ReviewPipeline;
+import com.tororang.review.core.pipeline.ReviewRunSummary;
 import com.tororang.review.core.pipeline.TestCaseReport;
 import com.tororang.review.core.pipeline.TestRunResult;
 import com.tororang.review.core.renderer.RenderContext;
 import com.tororang.review.core.renderer.ReviewReport;
 import com.tororang.review.core.stack.MutationReport;
+import com.tororang.review.renderer.history.ReviewHistoryStore;
+import com.tororang.review.renderer.history.ReviewStatsReporter;
 import com.tororang.review.renderer.markdown.MarkdownReportWriter;
 import com.tororang.review.renderer.prcomment.PrCommentRenderer;
 import com.tororang.review.renderer.sarif.SarifWriter;
@@ -41,7 +45,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -111,6 +118,7 @@ public class ReviewRunner implements ApplicationRunner {
                             result.coverageDelta(), result.mutationReport(), command));
                 }
                 case FEEDBACK -> System.exit(runFeedbackPhase(command));
+                case STATS -> System.exit(runStatsPhase(command));
             }
         } catch (BuildFailedException e) {
             log.error(e.getMessage());
@@ -149,7 +157,49 @@ public class ReviewRunner implements ApplicationRunner {
         Gate gate = report.config().gate();
         boolean failed = report.gateFailed() || anyFailed(testCaseReports)
                 || coverageGateFailed(coverageDelta, gate) || mutationGateFailed(mutationReport, gate);
+
+        recordHistory(report, coverageDelta, mutationReport, failed, command);
         return failed ? 1 : 0;
+    }
+
+    /**
+     * 통계용 실행 기록. REPORT/ALL 두 경로 모두에서 호출되며, 로컬에서 반복 실행할 때 {@code
+     * --history} 파일에 누적된다(`--phase=stats`로 집계). CI 컨테이너는 매번 사라지므로
+     * 이 기록은 로컬 반복 실행에서만 의미가 있다.
+     */
+    private void recordHistory(ReviewReport report, CoverageDelta coverageDelta, MutationReport mutationReport,
+                                boolean gateFailed, ReviewCommand command) {
+        Map<String, Integer> byRuleId = new HashMap<>();
+        Map<String, Integer> bySeverity = new HashMap<>();
+        for (Finding finding : report.findings()) {
+            byRuleId.merge(finding.ruleId(), 1, Integer::sum);
+            bySeverity.merge(finding.severity().name(), 1, Integer::sum);
+        }
+
+        LlmUsage usage = JsonIO.read(command.llmUsagePath(), LlmUsage.class, null);
+        ReviewRunSummary summary = new ReviewRunSummary(
+                Instant.now().toString(),
+                command.repoRoot().toString(),
+                report.config().mode().name(),
+                firstNonBlank(System.getenv("REVIEW_LLM_BACKEND"), "claude"),
+                byRuleId,
+                bySeverity,
+                report.findings().size(),
+                gateFailed,
+                coverageDelta == null ? null : coverageDelta.deltaPercentagePoints(),
+                (mutationReport == null || mutationReport.totalMutations() == 0) ? null : mutationReport.mutationScorePercent(),
+                usage == null ? null : usage.durationMs(),
+                usage == null ? null : usage.costUsd()
+        );
+        ReviewHistoryStore.append(command.historyPath(), summary);
+    }
+
+    /** --phase=stats: 누적된 --history 파일을 읽어 통계 Markdown을 만든다. */
+    private int runStatsPhase(ReviewCommand command) {
+        List<ReviewRunSummary> history = ReviewHistoryStore.readAll(command.historyPath());
+        new ReviewStatsReporter().write(history, command.statsReportPath());
+        log.info("통계 리포트: {} ({}건 누적)", command.statsReportPath(), history.size());
+        return 0;
     }
 
     /**

@@ -24,6 +24,26 @@ class ReviewCommandTest {
         assertThat(command.githubRepo()).isNull();
         assertThat(command.maxFeedbackPullRequests()).isEqualTo(200);
         assertThat(command.diffBase()).isEqualTo("origin/main");
+        assertThat(command.llmUsagePath()).isEqualTo(Path.of(".").resolve("build/llm-usage.json"));
+        assertThat(command.historyPath()).isEqualTo(Path.of(".").resolve("build/review-history.json"));
+        assertThat(command.statsReportPath()).isEqualTo(Path.of(".").resolve("build/review-stats.md"));
+    }
+
+    @Test
+    void parsesStatsPhase() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments("--phase=stats"));
+
+        assertThat(command.phase()).isEqualTo(ReviewCommand.Phase.STATS);
+    }
+
+    @Test
+    void honorsHistoryAndStatsPaths() {
+        ReviewCommand command = ReviewCommand.from(new DefaultApplicationArguments(
+                "--history=/repo/h.json", "--stats-report=/repo/s.md", "--llm-usage=/repo/u.json"));
+
+        assertThat(command.historyPath()).isEqualTo(Path.of("/repo/h.json"));
+        assertThat(command.statsReportPath()).isEqualTo(Path.of("/repo/s.md"));
+        assertThat(command.llmUsagePath()).isEqualTo(Path.of("/repo/u.json"));
     }
 
     @Test

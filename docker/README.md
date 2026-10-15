@@ -76,6 +76,36 @@ docker run --rm \
 `--phase`를 생략하면 기본값이 `all`이다. 로컬에서 빠르게 확인할 때만 쓰고, 실제 CI(특히 외부/fork
 PR)에서는 반드시 build/report를 나눠서 실행한다.
 
+### 로컬 Ollama로 리뷰하기 (로컬 전용, GitHub Actions 미지원)
+
+`REVIEW_LLM_BACKEND=ollama`를 주면 `OllamaLlmClient`가 Anthropic API 대신 로컬에서 돌고 있는
+[Ollama](https://ollama.com)를 쓴다. 비용이 들지 않지만 **Claude Code CLI처럼 Read/Grep/Glob
+도구 호출을 못 하므로 diff 모드만 지원**하고, 적용 규칙 본문과 diff 텍스트를 프롬프트에 직접
+넣는다(레포 전체 탐색 불가). **GitHub Actions 쪽은 지원하지 않는다** — GitHub가 호스팅하는
+러너는 사용자 PC의 Ollama(localhost)에 네트워크로 닿을 수 없기 때문이다. 로컬 CLI(`--phase=all`
+또는 `report`)에서만 쓴다.
+
+```bash
+ollama pull qwen2.5-coder:7b   # 한 번만
+ollama serve                    # 백그라운드로 켜둠
+
+OLLAMA_MODEL=qwen2.5-coder:7b REVIEW_LLM_BACKEND=ollama \
+  docker run --rm --add-host=host.docker.internal:host-gateway \
+    -v "$PWD/target-repo:/workspace" \
+    -v "$PWD/../review-rulepack:/rulepack:ro" \
+    -e REVIEW_LLM_BACKEND -e OLLAMA_MODEL -e OLLAMA_HOST=http://host.docker.internal:11434 \
+    ai-review-engine:local \
+    --phase=report --repo=/workspace --rulepack=/rulepack --config=/workspace/.review.yml
+```
+
+- `OLLAMA_MODEL`은 필수(설정 안 하면 바로 에러), `OLLAMA_HOST` 기본값은 `http://localhost:11434`
+  — 컨테이너 안에서 호스트의 Ollama에 접근하려면 위처럼 `host.docker.internal`로 바꿔줘야 한다.
+- 매 REPORT/ALL 실행마다 요약이 `--history`(기본 `<repo>/build/review-history.json`)에 하나씩
+  누적된다(규칙별 위반 건수, 심각도, LLM 응답시간/비용, 커버리지·뮤테이션 스코어). 로컬에서
+  반복 실행할 때만 의미가 있다 — `docker run --rm`인 CI 컨테이너는 매번 사라지므로 누적되지 않는다.
+- `--phase=stats`를 돌리면 누적된 `--history`를 읽어 `--stats-report`(기본
+  `<repo>/build/review-stats.md`)에 통계 Markdown을 만든다.
+
 ## 알려진 한계
 
 - 의존성 다운로드와 "네트워크 차단 빌드"를 완전히 자동으로 나누는 로직은 아직 없다 — 위 예시처럼

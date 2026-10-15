@@ -19,7 +19,10 @@ import java.util.List;
  * --github-repo=owner/repo   FEEDBACK 단계 대상 GitHub 레포 (로컬 --repo와 무관, 필수)
  * --max-prs=<n>              FEEDBACK 단계에서 훑을 최근 PR 개수 상한 (기본값: 200)
  * --diff-base=<ref>          로컬 git diff 기반 diff 모드의 비교 기준 ref (기본값: origin/main)
- * --phase=build|gentest|testrun|report|feedback|all  샌드박스 분리 실행 단계 (기본값: all, 설계서 1.3 참고)
+ * --llm-usage=<path>         REPORT 단계 산출물(LLM 응답시간/비용) 경로 (기본값: <repo>/build/llm-usage.json)
+ * --history=<path>           리뷰 실행 기록 누적 파일 (기본값: <repo>/build/review-history.json, 로컬 반복 실행 전용)
+ * --stats-report=<path>      STATS 단계 산출물(통계 Markdown) 경로 (기본값: <repo>/build/review-stats.md)
+ * --phase=build|gentest|testrun|report|feedback|stats|all  샌드박스 분리 실행 단계 (기본값: all, 설계서 1.3 참고)
  *
  * phase가 나뉘는 이유:
  * - build/testrun: 대상 레포의 코드를 실제로 컴파일·실행하므로 시크릿 없이 네트워크 차단
@@ -43,11 +46,14 @@ public record ReviewCommand(
         String githubRepo,
         int maxFeedbackPullRequests,
         String diffBase,
+        Path llmUsagePath,
+        Path historyPath,
+        Path statsReportPath,
         Phase phase
 ) {
 
     public enum Phase {
-        BUILD, GENTEST, TESTRUN, REPORT, FEEDBACK, ALL
+        BUILD, GENTEST, TESTRUN, REPORT, FEEDBACK, STATS, ALL
     }
 
     public static ReviewCommand from(ApplicationArguments args) {
@@ -63,10 +69,13 @@ public record ReviewCommand(
         String githubRepo = firstValue(args, "github-repo");
         int maxFeedbackPullRequests = parseIntOption(args, "max-prs", 200);
         String diffBase = firstValueOrDefault(args, "diff-base", "origin/main");
+        Path llmUsagePath = pathOption(args, "llm-usage", repoRoot.resolve("build/llm-usage.json"));
+        Path historyPath = pathOption(args, "history", repoRoot.resolve("build/review-history.json"));
+        Path statsReportPath = pathOption(args, "stats-report", repoRoot.resolve("build/review-stats.md"));
         Phase phase = phaseOption(args);
         return new ReviewCommand(repoRoot, rulepackDir, configPath, findingsPath, genTestPath, testCaseReportPath,
                 baselineCoveragePath, coverageDeltaPath, mutationReportPath, githubRepo, maxFeedbackPullRequests,
-                diffBase, phase);
+                diffBase, llmUsagePath, historyPath, statsReportPath, phase);
     }
 
     private static Phase phaseOption(ApplicationArguments args) {
@@ -80,6 +89,7 @@ public record ReviewCommand(
             case "testrun" -> Phase.TESTRUN;
             case "report" -> Phase.REPORT;
             case "feedback" -> Phase.FEEDBACK;
+            case "stats" -> Phase.STATS;
             case "all" -> Phase.ALL;
             default -> throw new IllegalArgumentException("unknown phase: " + raw);
         };

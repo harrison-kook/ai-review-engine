@@ -27,7 +27,9 @@ class ArchitectureTest {
                 "com.tororang.review.renderer.prcomment",
                 "com.tororang.review.renderer.prcomment..",
                 "com.tororang.review.renderer.markdown..",
-                "com.tororang.review.renderer.sarif.."
+                "com.tororang.review.renderer.sarif..",
+                "com.tororang.review.renderer.history",
+                "com.tororang.review.renderer.history.."
             )
             .because("core는 파이프라인/설정/룰 병합/Finding 모델만 담당하며, 구현 패키지는 core의 인터페이스에 의존해야 한다");
 

@@ -7,6 +7,7 @@ import com.tororang.review.core.llm.GenTestStatus;
 import com.tororang.review.core.llm.GeneratedTestCase;
 import com.tororang.review.core.llm.LlmClient;
 import com.tororang.review.core.llm.LlmClientException;
+import com.tororang.review.core.llm.LlmUsage;
 import com.tororang.review.core.llm.ReviewRequest;
 import com.tororang.review.core.llm.ReviewResult;
 import com.tororang.review.core.llm.TestGenRequest;
@@ -18,7 +19,6 @@ import com.tororang.review.core.util.ProcessExecutor;
 import com.tororang.review.core.util.ProcessOutcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,8 +28,9 @@ import java.util.List;
  * 결과 JSON에서 reviewer 에이전트가 낸 Findings 배열을 꺼낸다.
  * agents/commands 구조(review-rulepack)를 그대로 활용하며, 이 클라이언트는 프롬프트 내용을
  * 직접 만들지 않는다 — 어떤 슬래시 커맨드를 어디서 실행할지만 결정한다.
+ * 빈 등록은 {@link LlmClientConfig}가 REVIEW_LLM_BACKEND 환경변수에 따라 담당한다
+ * (여기 자체를 @Component로 스캔하면 OllamaLlmClient와 동시에 LlmClient 빈이 2개가 되어 충돌한다).
  */
-@Component
 public class ClaudeCodeCliClient implements LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(ClaudeCodeCliClient.class);
@@ -83,9 +84,10 @@ public class ClaudeCodeCliClient implements LlmClient {
             throw new LlmClientException("claude CLI timed out after " + request.timeout());
         }
 
-        String resultText = extractResultText(outcome.output());
+        JsonNode envelope = parseEnvelope(outcome.output());
+        String resultText = resultTextOf(envelope, outcome.output());
         List<FindingCandidate> candidates = parseFindingCandidates(resultText);
-        return new ReviewResult(candidates, resultText);
+        return new ReviewResult(candidates, resultText, usageOf(envelope));
     }
 
     @Override
@@ -103,12 +105,13 @@ public class ClaudeCodeCliClient implements LlmClient {
             throw new LlmClientException("claude CLI timed out after " + request.timeout());
         }
 
-        String resultText = extractResultText(outcome.output());
+        JsonNode envelope = parseEnvelope(outcome.output());
+        String resultText = resultTextOf(envelope, outcome.output());
         List<GeneratedTestCase> generated = parseGeneratedTestCases(resultText);
         return new TestGenResult(generated, resultText);
     }
 
-    private String extractResultText(String rawStdout) {
+    private JsonNode parseEnvelope(String rawStdout) {
         JsonNode envelope;
         try {
             envelope = jsonMapper.readTree(stripLeadingNonJson(rawStdout));
@@ -122,13 +125,29 @@ public class ClaudeCodeCliClient implements LlmClient {
             log.error("claude CLI returned is_error=true, full output:\n{}", rawStdout);
             throw new LlmClientException("claude CLI가 오류를 반환했습니다 (전체 로그는 ERROR 레벨 참고): " + truncate(rawStdout));
         }
+        return envelope;
+    }
 
+    private String resultTextOf(JsonNode envelope, String rawStdout) {
         JsonNode result = envelope.get("result");
         if (result == null || result.isNull()) {
             log.error("claude CLI response missing result field, full output:\n{}", rawStdout);
             throw new LlmClientException("claude CLI 응답에 result 필드가 없습니다: " + truncate(rawStdout));
         }
         return result.asText();
+    }
+
+    /** claude CLI의 --output-format json envelope가 주는 비용/시간 메타데이터. 필드가 없으면 null로 둔다. */
+    private LlmUsage usageOf(JsonNode envelope) {
+        return new LlmUsage(longOrNull(envelope.get("duration_ms")), null, null, doubleOrNull(envelope.get("total_cost_usd")));
+    }
+
+    private Double doubleOrNull(JsonNode node) {
+        return (node == null || node.isNull()) ? null : node.asDouble();
+    }
+
+    private Long longOrNull(JsonNode node) {
+        return (node == null || node.isNull()) ? null : node.asLong();
     }
 
     private List<FindingCandidate> parseFindingCandidates(String resultText) {
