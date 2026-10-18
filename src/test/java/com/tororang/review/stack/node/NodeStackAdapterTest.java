@@ -58,4 +58,45 @@ class NodeStackAdapterTest {
     void idIsNode() {
         assertThat(adapter.id()).isEqualTo("node");
     }
+
+    @Test
+    void detectsVitestFromDevDependencies(@TempDir Path repoRoot) throws IOException {
+        Files.writeString(repoRoot.resolve("package.json"), """
+                { "devDependencies": { "vitest": "^2.0.0" } }
+                """);
+
+        assertThat(adapter.detectTestRunner(repoRoot)).isEqualTo(NodeStackAdapter.NodeTestRunner.VITEST);
+    }
+
+    @Test
+    void detectsJestFromDependencies(@TempDir Path repoRoot) throws IOException {
+        Files.writeString(repoRoot.resolve("package.json"), """
+                { "dependencies": { "jest": "^29.0.0" } }
+                """);
+
+        assertThat(adapter.detectTestRunner(repoRoot)).isEqualTo(NodeStackAdapter.NodeTestRunner.JEST);
+    }
+
+    @Test
+    void prefersVitestWhenBothAreConfigured(@TempDir Path repoRoot) throws IOException {
+        Files.writeString(repoRoot.resolve("package.json"), """
+                { "devDependencies": { "jest": "^29.0.0", "vitest": "^2.0.0" } }
+                """);
+
+        assertThat(adapter.detectTestRunner(repoRoot)).isEqualTo(NodeStackAdapter.NodeTestRunner.VITEST);
+    }
+
+    @Test
+    void detectsNoTestRunnerWhenNeitherIsConfigured(@TempDir Path repoRoot) throws IOException {
+        Files.writeString(repoRoot.resolve("package.json"), """
+                { "dependencies": { "react": "^18.0.0" } }
+                """);
+
+        assertThat(adapter.detectTestRunner(repoRoot)).isEqualTo(NodeStackAdapter.NodeTestRunner.NONE);
+    }
+
+    @Test
+    void detectsNoTestRunnerWhenPackageJsonIsMissing(@TempDir Path repoRoot) {
+        assertThat(adapter.detectTestRunner(repoRoot)).isEqualTo(NodeStackAdapter.NodeTestRunner.NONE);
+    }
 }

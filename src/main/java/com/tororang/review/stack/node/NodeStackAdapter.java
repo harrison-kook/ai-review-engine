@@ -1,5 +1,7 @@
 package com.tororang.review.stack.node;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.FindingCandidate;
 import com.tororang.review.core.model.FindingsFilter;
@@ -7,6 +9,7 @@ import com.tororang.review.core.stack.CoverageReport;
 import com.tororang.review.core.stack.MutationReport;
 import com.tororang.review.core.stack.StackAdapter;
 import com.tororang.review.core.stack.StepResult;
+import com.tororang.review.core.stack.TestCaseResult;
 import com.tororang.review.core.stack.TestResult;
 import com.tororang.review.core.stack.Workspace;
 import com.tororang.review.core.util.ProcessOutcome;
@@ -21,6 +24,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 /**
@@ -35,17 +39,22 @@ import java.util.stream.Stream;
  * 감지되는 모든 StackAdapter를 함께 실행하므로, 같은 레포에서 Gradle 어댑터와 이 어댑터가
  * 동시에 선택될 수 있다.
  *
- * <p>현재 범위는 소스 리뷰(lint)로 한정한다 — test()/coverage()/mutate()는 Jest/Vitest/
- * Istanbul/Stryker 연동이 추가되기 전까지 스텁(NONE/EMPTY)을 반환한다.
+ * <p>소스 리뷰(lint)에 더해 테스트 실행(Jest/Vitest)까지 지원한다 — 대상 레포의
+ * {@code package.json}에 둘 중 하나가 의존성으로 잡혀 있으면 그 러너로 실행하고, 둘 다 없으면
+ * {@link TestResult#NONE}을 돌려준다(설정 없는 플러그인은 결과를 안 내는 lint()와 같은 원칙).
+ * {@code coverage()}/{@code mutate()}는 Istanbul/Stryker 연동이 추가되기 전까지 스텁(EMPTY)이다.
  */
 @Component
 public class NodeStackAdapter implements StackAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(NodeStackAdapter.class);
     private static final Path ESLINT_REPORT_RELATIVE_PATH = Path.of(".ai-review-engine", "eslint-report.json");
+    private static final Path TEST_REPORT_RELATIVE_PATH = Path.of(".ai-review-engine", "node-test-report.json");
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final NpmRunner runner;
     private final EsLintReportParser eslintParser = new EsLintReportParser();
+    private final JestJsonReportParser testReportParser = new JestJsonReportParser();
 
     public NodeStackAdapter() {
         this(new NpmRunner());
@@ -102,7 +111,32 @@ public class NodeStackAdapter implements StackAdapter {
 
     @Override
     public TestResult test(Workspace ws) {
-        return TestResult.NONE;
+        Path repoRoot = ws.repoRoot();
+        Path nodeRoot = requireNodeProjectRoot(repoRoot);
+
+        NodeTestRunner testRunner = detectTestRunner(nodeRoot);
+        if (testRunner == NodeTestRunner.NONE) {
+            return TestResult.NONE;
+        }
+
+        Path reportPath = nodeRoot.resolve(TEST_REPORT_RELATIVE_PATH);
+        createParentDirs(reportPath);
+
+        // jest/vitest는 실패한 테스트가 있으면 비정상 종료 코드를 내므로, eslint/gradle check와
+        // 같은 이유로 종료 코드는 무시하고 리포트 파일이 생겼는지만 본다.
+        ProcessOutcome result = testRunner.run(runner, nodeRoot, reportPath);
+        if (result.timedOut()) {
+            log.warn("test ({}) timed out for {}", testRunner, nodeRoot);
+        }
+
+        if (!Files.isRegularFile(reportPath)) {
+            log.debug("test report not found, skipping: {}", reportPath);
+            return TestResult.NONE;
+        }
+
+        List<TestCaseResult> cases = testReportParser.parse(reportPath, repoRoot);
+        int failed = (int) cases.stream().filter(c -> !c.passed()).count();
+        return new TestResult(failed == 0, cases.size(), failed, cases, result.output());
     }
 
     @Override
@@ -161,5 +195,73 @@ public class NodeStackAdapter implements StackAdapter {
         } catch (IOException e) {
             throw new UncheckedIOException("failed to create eslint report directory: " + reportPath.getParent(), e);
         }
+    }
+
+    /**
+     * {@code package.json}의 dependencies/devDependencies를 보고 어떤 테스트 러너가 설치돼
+     * 있는지 고른다. 둘 다 있으면 vitest를 우선한다(vitest는 jest API와 호환되도록 jest를
+     * devDependencies에 같이 두는 레포가 있을 수 있어서, 실제로 쓰는 쪽을 더 신뢰할 수 있는
+     * vitest 쪽으로 판단한다). 둘 다 없으면 테스트를 실행하지 않는다 — 설정 없는 정적분석
+     * 플러그인은 결과를 안 내는 lint()와 같은 원칙이다.
+     */
+    NodeTestRunner detectTestRunner(Path nodeRoot) {
+        PackageJson packageJson = readPackageJson(nodeRoot);
+        if (packageJson == null) {
+            return NodeTestRunner.NONE;
+        }
+        if (hasDependency(packageJson, "vitest")) {
+            return NodeTestRunner.VITEST;
+        }
+        if (hasDependency(packageJson, "jest")) {
+            return NodeTestRunner.JEST;
+        }
+        return NodeTestRunner.NONE;
+    }
+
+    private boolean hasDependency(PackageJson packageJson, String name) {
+        return packageJson.dependencies().containsKey(name) || packageJson.devDependencies().containsKey(name);
+    }
+
+    private PackageJson readPackageJson(Path nodeRoot) {
+        Path packageJsonPath = nodeRoot.resolve("package.json");
+        try {
+            return MAPPER.readValue(packageJsonPath.toFile(), PackageJson.class);
+        } catch (IOException e) {
+            log.warn("failed to read package.json: {} ({})", packageJsonPath, e.getMessage());
+            return null;
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record PackageJson(Map<String, String> dependencies, Map<String, String> devDependencies) {
+        private PackageJson {
+            dependencies = dependencies == null ? Map.of() : Map.copyOf(dependencies);
+            devDependencies = devDependencies == null ? Map.of() : Map.copyOf(devDependencies);
+        }
+    }
+
+    enum NodeTestRunner {
+        NONE {
+            @Override
+            ProcessOutcome run(NpmRunner runner, Path nodeRoot, Path reportPath) {
+                throw new UnsupportedOperationException("NONE은 실행할 수 없다 — 호출 전에 감지 단계에서 걸러야 한다");
+            }
+        },
+        VITEST {
+            @Override
+            ProcessOutcome run(NpmRunner runner, Path nodeRoot, Path reportPath) {
+                return runner.npx(nodeRoot, "--no-install", "vitest", "run",
+                        "--reporter=json", "--outputFile=" + reportPath);
+            }
+        },
+        JEST {
+            @Override
+            ProcessOutcome run(NpmRunner runner, Path nodeRoot, Path reportPath) {
+                return runner.npx(nodeRoot, "--no-install", "jest",
+                        "--json", "--outputFile=" + reportPath);
+            }
+        };
+
+        abstract ProcessOutcome run(NpmRunner runner, Path nodeRoot, Path reportPath);
     }
 }

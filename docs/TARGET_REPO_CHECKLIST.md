@@ -10,10 +10,13 @@
   한다 — 현재 스택 어댑터는 `gradle-spring`(`StackAdapter.detect()`가 `build.gradle` 존재로
   판별)과 `node`(`package.json` 존재로 판별, 2026-10-14 추가) 둘뿐이다. Maven 등 다른 JVM
   빌드 도구는 아직 미지원 (설계서 4단계, 필요 시 착수).
-  - **`node` 어댑터는 현재 ESLint 기반 소스 리뷰(lint)까지만 지원한다.** 프레임워크(React/
-    Next.js/Vue.js)를 구분하지 않고 대상 레포에 이미 설정된 ESLint를 그대로 실행한다.
-    test/coverage/mutation은 Jest/Vitest/Istanbul/Stryker 연동 전까지 스텁이라 **항상
-    0건/0%로 처리된다** — 커버리지·뮤테이션 게이트를 Node 레포에 걸어도 의미가 없다.
+  - **`node` 어댑터는 ESLint 기반 소스 리뷰(lint)에 더해 Jest/Vitest 테스트 실행도
+    지원한다(2026-10-16 추가).** 프레임워크(React/Next.js/Vue.js)를 구분하지 않고 대상
+    레포에 이미 설정된 ESLint를 그대로 실행하며, `package.json`에 jest/vitest 중 하나가
+    의존성으로 있으면 그 러너를 `--json`/`--reporter=json` 출력으로 돌려 테스트 결과를
+    파싱한다(둘 다 있으면 vitest 우선). 둘 다 없으면 테스트를 실행하지 않고 그냥 넘어간다
+    (lint와 같은 원칙). **coverage/mutation은 여전히 스텁** — Istanbul/Stryker 연동 전까지
+    항상 0%로 처리된다 — 커버리지·뮤테이션 게이트를 Node 레포에 걸어도 의미가 없다.
   - **모노레포(루트 Java/Spring + 서브디렉터리 Node.js 등)도 지원한다.** `ReviewPipeline`이
     레포에서 `detect()`가 true인 모든 StackAdapter를 함께 돌려 build/lint/test/coverage
     결과를 합산한다(첫 매칭만 쓰던 이전 동작에서 변경됨). `node` 어댑터는 레포 루트에

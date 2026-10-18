@@ -396,8 +396,11 @@ SARIF 출력은 GitHub Code Scanning 탭에 업로드할 수 있어 범용성이
   루트 Java/Spring + `frontend/` 서브디렉터리 Node.js 구조)가 생겨서 `NodeStackAdapter`를
   추가했다. `package.json` 존재로 감지하며(React/Next.js/Vue.js 포함, 프레임워크 구분 없이
   대상 레포에 이미 설정된 ESLint를 그대로 실행), 레포 루트에 `package.json`이 없으면 바로
-  아래 서브디렉터리(깊이 1)까지 한 번 더 찾는다. **범위는 소스 리뷰(lint)로 한정** —
-  test()/coverage()/mutate()는 Jest/Vitest/Istanbul/Stryker 연동 전까지 스텁(NONE/EMPTY)이다.
+  아래 서브디렉터리(깊이 1)까지 한 번 더 찾는다. 소스 리뷰(lint)에 더해 **테스트 실행도
+  지원한다(2026-10-16)** — `package.json`에 jest/vitest 중 하나가 의존성으로 있으면 그 러너를
+  `--json`/`--reporter=json` 출력으로 실행해 결과를 파싱한다(둘 다 있으면 vitest 우선, 설정이
+  타깃 레포에 전혀 없으면 lint()와 같은 원칙으로 `TestResult.NONE`). **coverage()/mutate()는
+  여전히 스텁** — Istanbul/Stryker 연동 전까지 EMPTY를 돌려준다.
   같은 변경으로 **모노레포 지원**도 들어갔다: `ReviewPipeline`이 더 이상 첫 번째로 매칭되는
   StackAdapter만 쓰지 않고, `detect()`가 true인 어댑터를 전부 돌려 build/lint/test/coverage/
   mutation 결과를 합산한다. Maven 등 다른 JVM 빌드 도구는 여전히 미지원 — 그 스택을 쓰는
