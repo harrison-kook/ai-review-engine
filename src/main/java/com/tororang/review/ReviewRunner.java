@@ -19,6 +19,7 @@ import com.tororang.review.core.llm.LlmUsage;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.pipeline.BuildFailedException;
 import com.tororang.review.core.pipeline.CoverageDelta;
+import com.tororang.review.core.pipeline.E2eResult;
 import com.tororang.review.core.pipeline.FindingsIO;
 import com.tororang.review.core.pipeline.JsonIO;
 import com.tororang.review.core.pipeline.JsonListIO;
@@ -110,12 +111,13 @@ public class ReviewRunner implements ApplicationRunner {
                     List<TestCaseReport> testCaseReports = JsonListIO.read(command.testCaseReportPath(), TestCaseReport.class);
                     CoverageDelta coverageDelta = JsonIO.read(command.coverageDeltaPath(), CoverageDelta.class, null);
                     MutationReport mutationReport = JsonIO.read(command.mutationReportPath(), MutationReport.class, MutationReport.EMPTY);
-                    System.exit(finishReport(report, testCaseReports, coverageDelta, mutationReport, command));
+                    E2eResult e2eResult = JsonIO.read(command.e2eResultPath(), E2eResult.class, E2eResult.DISABLED);
+                    System.exit(finishReport(report, testCaseReports, coverageDelta, mutationReport, e2eResult, command));
                 }
                 case ALL -> {
                     PipelineResult result = pipeline.run(command);
                     System.exit(finishReport(result.reviewReport(), result.testCaseReports(),
-                            result.coverageDelta(), result.mutationReport(), command));
+                            result.coverageDelta(), result.mutationReport(), result.e2eResult(), command));
                 }
                 case FEEDBACK -> System.exit(runFeedbackPhase(command));
                 case STATS -> System.exit(runStatsPhase(command));
@@ -133,20 +135,22 @@ public class ReviewRunner implements ApplicationRunner {
      * 하나라도 있으면 exit code 1.
      */
     private int finishReport(ReviewReport report, List<TestCaseReport> testCaseReports,
-                              CoverageDelta coverageDelta, MutationReport mutationReport, ReviewCommand command) {
+                              CoverageDelta coverageDelta, MutationReport mutationReport,
+                              E2eResult e2eResult, ReviewCommand command) {
         Optional<GitHubActionsContext> ghContext = GitHubActionsContext.fromEnvironment();
         if (ghContext.isPresent()) {
-            report = renderToGitHub(report, ghContext.get());
+            report = renderToGitHub(report, e2eResult, ghContext.get());
         } else {
             report = applyLocalDiffScopeIfNeeded(report, command);
             logFindingsToConsole(report);
             logTestCaseReportsToConsole(testCaseReports);
             logCoverageToConsole(coverageDelta);
             logMutationToConsole(mutationReport);
+            logE2eToConsole(e2eResult);
         }
         FindingsIO.write(command.findingsPath(), report.findings());
 
-        markdownReportWriter.write(report, testCaseReports, coverageDelta, mutationReport,
+        markdownReportWriter.write(report, testCaseReports, coverageDelta, mutationReport, e2eResult,
                 command.repoRoot().resolve("build/review-report.md"));
         log.info("리포트 파일: {}", command.repoRoot().resolve("build/review-report.md"));
 
@@ -156,7 +160,8 @@ public class ReviewRunner implements ApplicationRunner {
 
         Gate gate = report.config().gate();
         boolean failed = report.gateFailed() || anyFailed(testCaseReports)
-                || coverageGateFailed(coverageDelta, gate) || mutationGateFailed(mutationReport, gate);
+                || coverageGateFailed(coverageDelta, gate) || mutationGateFailed(mutationReport, gate)
+                || e2eGateFailed(e2eResult, gate);
 
         recordHistory(report, coverageDelta, mutationReport, failed, command);
         return failed ? 1 : 0;
@@ -326,7 +331,7 @@ public class ReviewRunner implements ApplicationRunner {
         return new ReviewReport(scoped, report.config());
     }
 
-    private ReviewReport renderToGitHub(ReviewReport report, GitHubActionsContext ctx) {
+    private ReviewReport renderToGitHub(ReviewReport report, E2eResult e2eResult, GitHubActionsContext ctx) {
         RestTemplate restTemplate = GitHubRestTemplates.withToken(ctx.token());
 
         if (report.config().mode() == ReviewMode.DIFF) {
@@ -338,7 +343,22 @@ public class ReviewRunner implements ApplicationRunner {
         }
 
         PrCommentPublisher publisher = new GitHubPrCommentPublisher(restTemplate, ctx.pullRequest(), ctx.headSha());
-        new PrCommentRenderer(publisher).render(report, RenderContext.EMPTY);
+        new PrCommentRenderer(publisher, e2eResult).render(report, RenderContext.EMPTY);
         return report;
+    }
+
+    private boolean e2eGateFailed(E2eResult e2eResult, Gate gate) {
+        return gate.e2eFailOnAny() && e2eResult.enabled() && !e2eResult.success();
+    }
+
+    private void logE2eToConsole(E2eResult e2eResult) {
+        if (!e2eResult.enabled()) {
+            return;
+        }
+        if (e2eResult.envFailureReason() != null) {
+            log.info("E2E: 환경 오류로 실행되지 못함 — {}", e2eResult.envFailureReason());
+            return;
+        }
+        log.info("E2E: {}/{} 통과", e2eResult.totalTests() - e2eResult.failedTests(), e2eResult.totalTests());
     }
 }

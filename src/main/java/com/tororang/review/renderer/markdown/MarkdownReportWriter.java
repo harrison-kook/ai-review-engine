@@ -4,9 +4,11 @@ import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.Severity;
 import com.tororang.review.core.adapter.RuleFeedbackSummary;
 import com.tororang.review.core.pipeline.CoverageDelta;
+import com.tororang.review.core.pipeline.E2eResult;
 import com.tororang.review.core.pipeline.TestCaseReport;
 import com.tororang.review.core.renderer.ReviewReport;
 import com.tororang.review.core.stack.MutationReport;
+import com.tororang.review.core.stack.TestCaseResult;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -24,7 +26,8 @@ import java.util.Map;
 public final class MarkdownReportWriter {
 
     public void write(ReviewReport reviewReport, List<TestCaseReport> testCaseReports,
-                       CoverageDelta coverageDelta, MutationReport mutationReport, Path outputPath) {
+                       CoverageDelta coverageDelta, MutationReport mutationReport,
+                       E2eResult e2eResult, Path outputPath) {
         StringBuilder sb = new StringBuilder();
         sb.append("# 코드 리뷰 리포트\n\n");
         sb.append("생성 시각: ").append(Instant.now()).append("\n\n");
@@ -33,6 +36,7 @@ public final class MarkdownReportWriter {
         appendTestCaseSection(sb, testCaseReports);
         appendCoverageSection(sb, coverageDelta, reviewReport);
         appendMutationSection(sb, mutationReport, reviewReport);
+        appendE2eSection(sb, e2eResult, reviewReport);
 
         try {
             if (outputPath.getParent() != null) {
@@ -164,6 +168,44 @@ public final class MarkdownReportWriter {
                     report.config().gate().minMutationScore(), failed ? "**FAIL**" : "PASS"));
         }
         sb.append("\n");
+    }
+
+    /**
+     * docs/E2E_PIPELINE_DESIGN.md. e2eResult.enabled()가 false면 아예 설정 안 한 것이므로
+     * 안내 문구만 남긴다. envFailureReason이 있으면 테스트가 실행되기도 전에 환경(서비스
+     * healthcheck 등)이 실패한 것이라 코드 버그와 구분해서 보여준다.
+     */
+    private void appendE2eSection(StringBuilder sb, E2eResult e2eResult, ReviewReport report) {
+        sb.append("## E2E\n\n");
+
+        if (e2eResult == null || !e2eResult.enabled()) {
+            sb.append("E2E는 `.review.yml`의 `e2e.enabled: true`를 설정해야 실행됩니다.\n\n");
+            return;
+        }
+
+        if (e2eResult.envFailureReason() != null) {
+            sb.append("**환경 오류**로 실행되지 못했습니다: ").append(e2eResult.envFailureReason()).append("\n\n");
+            return;
+        }
+
+        int passed = e2eResult.totalTests() - e2eResult.failedTests();
+        sb.append("- 전체: ").append(passed).append('/').append(e2eResult.totalTests()).append(" 통과\n");
+        if (report.config().gate().e2eFailOnAny()) {
+            sb.append("- Gate(`e2e_fail_on_any: true`): ").append(e2eResult.success() ? "PASS" : "**FAIL**").append("\n");
+        }
+        sb.append("\n");
+
+        if (!e2eResult.cases().isEmpty()) {
+            sb.append("| 테스트 | 결과 | 메시지 |\n");
+            sb.append("|---|---|---|\n");
+            for (TestCaseResult testCase : e2eResult.cases()) {
+                sb.append("| `").append(testCase.className()).append(" > ").append(testCase.methodName()).append('`')
+                        .append(" | ").append(testCase.passed() ? "PASSED" : "FAILED")
+                        .append(" | ").append(testCase.failureMessage() == null ? "" : escapeCell(testCase.failureMessage()))
+                        .append(" |\n");
+            }
+            sb.append("\n");
+        }
     }
 
     /**

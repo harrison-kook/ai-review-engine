@@ -1,7 +1,9 @@
 package com.tororang.review.core.pipeline;
 
+import com.tororang.review.core.config.E2eConfig;
 import com.tororang.review.core.config.ReviewConfig;
 import com.tororang.review.core.config.ReviewConfigLoader;
+import com.tororang.review.core.e2e.E2eRunner;
 import com.tororang.review.core.llm.GenTestStatus;
 import com.tororang.review.core.llm.GeneratedTestCase;
 import com.tororang.review.core.llm.LlmClient;
@@ -67,6 +69,7 @@ public class ReviewPipeline {
     private final List<StackAdapter> stackAdapters;
     private final LlmClient llmClient;
     private final ReviewConfigLoader configLoader = new ReviewConfigLoader();
+    private final E2eRunner e2eRunner = new E2eRunner();
     private final RuleMerger ruleMerger = new RuleMerger();
     private final RulepackInjector rulepackInjector = new RulepackInjector();
     private final TestCaseCatalog testCaseCatalog = new TestCaseCatalog();
@@ -111,6 +114,19 @@ public class ReviewPipeline {
 
         log.info("baseline tests: {}건 (실패 {}건)", baselineTestResult.totalTests(), baselineTestResult.failedTests());
         JsonIO.write(command.baselineCoveragePath(), baselineCoverage);
+
+        // E2E는 시크릿이 필요 없고 대상 레포 코드를 "실행"만 하므로 build 단계에 속한다
+        // (docs/E2E_PIPELINE_DESIGN.md 2장). lint/test와 달리 대상 레포가 .review.yml에
+        // e2e.enabled: true로 명시하지 않으면 아예 스킵한다. BUILD 단계는 .review.yml/rulepack이
+        // 전혀 없어도 성공해야 한다는 기존 원칙(시크릿/룰팩 불필요)을 깨지 않도록, 설정 로드
+        // 실패는 e2e를 건너뛰는 것으로만 처리하고 빌드 자체를 막지 않는다.
+        E2eConfig e2eConfig = loadE2eConfigOnly(command);
+        E2eResult e2eResult = e2eRunner.run(command.repoRoot(), e2eConfig);
+        if (e2eResult.enabled()) {
+            log.info("e2e: {}/{} 통과{}", e2eResult.totalTests() - e2eResult.failedTests(), e2eResult.totalTests(),
+                    e2eResult.envFailureReason() != null ? " (환경 오류: " + e2eResult.envFailureReason() + ")" : "");
+        }
+        JsonIO.write(command.e2eResultPath(), e2eResult);
     }
 
     public ReviewReport runReportPhase(ReviewCommand command) {
@@ -246,8 +262,9 @@ public class ReviewPipeline {
         runGenTestPhase(command);
         TestRunResult testRunResult = runTestRunPhase(command);
         ReviewReport reviewReport = runReportPhase(command);
+        E2eResult e2eResult = JsonIO.read(command.e2eResultPath(), E2eResult.class, E2eResult.DISABLED);
         return new PipelineResult(reviewReport, testRunResult.testCaseReports(),
-                testRunResult.coverageDelta(), testRunResult.mutationReport());
+                testRunResult.coverageDelta(), testRunResult.mutationReport(), e2eResult);
     }
 
     /**
@@ -255,6 +272,20 @@ public class ReviewPipeline {
      * frontend/ 서브디렉터리의 Node.js). detect()가 true인 어댑터를 전부 돌려서 각자의
      * build/lint/test/coverage 결과를 모은다 (findFirst가 아니라 filter 전체).
      */
+    /**
+     * BUILD 단계는 설정 파일이 아예 없어도 성공해야 한다(buildPhaseNeverTouchesRulepackOrLlm
+     * 테스트가 검증하는 기존 원칙). e2e만 선택적으로 켜지는 기능이므로, 설정을 못 읽으면 그냥
+     * e2e를 스킵한다 — 빌드 자체를 막지 않는다.
+     */
+    private E2eConfig loadE2eConfigOnly(ReviewCommand command) {
+        try {
+            return configLoader.load(command.configPath()).e2e();
+        } catch (Exception e) {
+            log.debug("설정을 읽지 못해 e2e를 건너뜁니다: {}", e.getMessage());
+            return E2eConfig.DISABLED;
+        }
+    }
+
     private List<StackAdapter> detectStackAdapters(Path repoRoot) {
         List<StackAdapter> detected = stackAdapters.stream()
                 .filter(adapter -> adapter.detect(repoRoot))

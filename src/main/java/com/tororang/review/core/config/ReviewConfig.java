@@ -13,7 +13,8 @@ public record ReviewConfig(
         List<String> exclude,
         Overrides overrides,
         Limits limits,
-        Gate gate
+        Gate gate,
+        E2eConfig e2e
 ) {
     public ReviewConfig {
         if (rulepack == null || rulepack.isBlank()) {
@@ -31,5 +32,6 @@ public record ReviewConfig(
         overrides = overrides == null ? Overrides.EMPTY : overrides;
         limits = limits == null ? Limits.EMPTY : limits;
         gate = gate == null ? Gate.DISABLED : gate;
+        e2e = e2e == null ? E2eConfig.DISABLED : e2e;
     }
 }

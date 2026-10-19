@@ -40,7 +40,8 @@ public final class ReviewConfigLoader {
                 stringList(root.get("exclude")),
                 parseOverrides(root.get("overrides")),
                 parseLimits(root.get("limits")),
-                parseGate(root.get("gate"))
+                parseGate(root.get("gate")),
+                parseE2e(root.get("e2e"))
         );
     }
 
@@ -89,7 +90,45 @@ public final class ReviewConfigLoader {
                 ? null
                 : minMutationNode.asDouble();
 
-        return new Gate(failOn, minCoverageDelta, minMutationScore);
+        JsonNode e2eFailOnAnyNode = node.get("e2e_fail_on_any");
+        boolean e2eFailOnAny = e2eFailOnAnyNode != null && !e2eFailOnAnyNode.isNull() && e2eFailOnAnyNode.asBoolean();
+
+        return new Gate(failOn, minCoverageDelta, minMutationScore, e2eFailOnAny);
+    }
+
+    private E2eConfig parseE2e(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return E2eConfig.DISABLED;
+        }
+
+        JsonNode enabledNode = node.get("enabled");
+        boolean enabled = enabledNode != null && !enabledNode.isNull() && enabledNode.asBoolean();
+
+        List<E2eConfig.ServiceSpec> services = new ArrayList<>();
+        JsonNode servicesNode = node.get("services");
+        if (servicesNode != null && servicesNode.isArray()) {
+            for (JsonNode serviceNode : servicesNode) {
+                services.add(new E2eConfig.ServiceSpec(
+                        textOrNull(serviceNode, "name"),
+                        textOrNull(serviceNode, "start"),
+                        textOrNull(serviceNode, "working_directory"),
+                        textOrNull(serviceNode, "healthcheck_url"),
+                        intOrDefault(serviceNode.get("timeout_seconds"), 120)
+                ));
+            }
+        }
+
+        return new E2eConfig(
+                enabled,
+                textOrNull(node, "working_directory"),
+                services,
+                textOrNull(node, "test_command"),
+                intOrDefault(node.get("timeout_seconds"), 300)
+        );
+    }
+
+    private int intOrDefault(JsonNode node, int defaultValue) {
+        return (node == null || node.isNull()) ? defaultValue : node.asInt();
     }
 
     private String textOrNull(JsonNode root, String field) {

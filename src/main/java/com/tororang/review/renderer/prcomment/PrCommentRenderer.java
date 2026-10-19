@@ -3,6 +3,7 @@ package com.tororang.review.renderer.prcomment;
 import com.tororang.review.core.adapter.PrCommentPublisher;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.Severity;
+import com.tororang.review.core.pipeline.E2eResult;
 import com.tororang.review.core.renderer.FindingsRenderer;
 import com.tororang.review.core.renderer.RenderContext;
 import com.tororang.review.core.renderer.ReviewReport;
@@ -18,9 +19,16 @@ import java.util.Set;
 public class PrCommentRenderer implements FindingsRenderer {
 
     private final PrCommentPublisher publisher;
+    private final E2eResult e2eResult;
 
     public PrCommentRenderer(PrCommentPublisher publisher) {
+        this(publisher, E2eResult.DISABLED);
+    }
+
+    /** e2eResult는 docs/E2E_PIPELINE_DESIGN.md Phase B — PR 요약 코멘트에 E2E 결과를 덧붙인다. */
+    public PrCommentRenderer(PrCommentPublisher publisher, E2eResult e2eResult) {
         this.publisher = publisher;
+        this.e2eResult = e2eResult;
     }
 
     @Override
@@ -61,6 +69,33 @@ public class PrCommentRenderer implements FindingsRenderer {
             sb.append("- Gate(`fail_on: ").append(report.config().gate().failOn()).append("`): ")
                     .append(report.gateFailed() ? "**FAIL**" : "PASS").append("\n");
         }
+        appendE2eSummary(sb, report);
         return sb.toString();
+    }
+
+    /**
+     * e2eResult.enabled()가 false면(설정 안 함) 아무것도 출력하지 않는다 — 대부분의 레포는
+     * E2E를 아직 안 쓰므로 PR 코멘트에 불필요한 줄을 늘리지 않는다.
+     */
+    private void appendE2eSummary(StringBuilder sb, ReviewReport report) {
+        if (!e2eResult.enabled()) {
+            return;
+        }
+
+        if (e2eResult.envFailureReason() != null) {
+            sb.append("- E2E: 환경 오류로 실행되지 못함 (").append(e2eResult.envFailureReason()).append(")\n");
+            return;
+        }
+
+        int passed = e2eResult.totalTests() - e2eResult.failedTests();
+        sb.append("- E2E: ").append(passed).append('/').append(e2eResult.totalTests()).append(" 통과");
+        if (!e2eResult.success()) {
+            sb.append(" **FAIL**");
+        }
+        sb.append("\n");
+
+        if (report.config().gate().e2eFailOnAny()) {
+            sb.append("- E2E Gate(`e2e_fail_on_any: true`): ").append(e2eResult.success() ? "PASS" : "**FAIL**").append("\n");
+        }
     }
 }

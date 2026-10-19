@@ -16,6 +16,7 @@ import java.util.List;
  * --baseline-coverage=<path> BUILD 단계 산출물(생성 테스트 추가 전 커버리지) 경로 (기본값: <repo>/build/baseline-coverage.json)
  * --coverage-delta=<path>    TESTRUN 단계 산출물(커버리지 증감) 경로 (기본값: <repo>/build/coverage-delta.json)
  * --mutation-report=<path>   TESTRUN 단계 산출물(PIT 뮤테이션 스코어) 경로 (기본값: <repo>/build/mutation-report.json)
+ * --e2e-result=<path>        BUILD 단계 산출물(E2E 실행 결과, docs/E2E_PIPELINE_DESIGN.md) 경로 (기본값: <repo>/build/e2e-result.json)
  * --github-repo=owner/repo   FEEDBACK 단계 대상 GitHub 레포 (로컬 --repo와 무관, 필수)
  * --max-prs=<n>              FEEDBACK 단계에서 훑을 최근 PR 개수 상한 (기본값: 200)
  * --diff-base=<ref>          로컬 git diff 기반 diff 모드의 비교 기준 ref (기본값: origin/main)
@@ -43,6 +44,7 @@ public record ReviewCommand(
         Path baselineCoveragePath,
         Path coverageDeltaPath,
         Path mutationReportPath,
+        Path e2eResultPath,
         String githubRepo,
         int maxFeedbackPullRequests,
         String diffBase,
@@ -66,6 +68,7 @@ public record ReviewCommand(
         Path baselineCoveragePath = pathOption(args, "baseline-coverage", repoRoot.resolve("build/baseline-coverage.json"));
         Path coverageDeltaPath = pathOption(args, "coverage-delta", repoRoot.resolve("build/coverage-delta.json"));
         Path mutationReportPath = pathOption(args, "mutation-report", repoRoot.resolve("build/mutation-report.json"));
+        Path e2eResultPath = pathOption(args, "e2e-result", repoRoot.resolve("build/e2e-result.json"));
         String githubRepo = firstValue(args, "github-repo");
         int maxFeedbackPullRequests = parseIntOption(args, "max-prs", 200);
         String diffBase = firstValueOrDefault(args, "diff-base", "origin/main");
@@ -74,8 +77,8 @@ public record ReviewCommand(
         Path statsReportPath = pathOption(args, "stats-report", repoRoot.resolve("build/review-stats.md"));
         Phase phase = phaseOption(args);
         return new ReviewCommand(repoRoot, rulepackDir, configPath, findingsPath, genTestPath, testCaseReportPath,
-                baselineCoveragePath, coverageDeltaPath, mutationReportPath, githubRepo, maxFeedbackPullRequests,
-                diffBase, llmUsagePath, historyPath, statsReportPath, phase);
+                baselineCoveragePath, coverageDeltaPath, mutationReportPath, e2eResultPath, githubRepo,
+                maxFeedbackPullRequests, diffBase, llmUsagePath, historyPath, statsReportPath, phase);
     }
 
     private static Phase phaseOption(ApplicationArguments args) {

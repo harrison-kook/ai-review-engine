@@ -104,7 +104,7 @@ class ReviewPipelineTest {
         return new ReviewCommand(dir, rulepackDir, configPath, findingsPath,
                 dir.resolve("build/gen-test-mapping.json"), dir.resolve("build/testcase-report.json"),
                 dir.resolve("build/baseline-coverage.json"), dir.resolve("build/coverage-delta.json"),
-                dir.resolve("build/mutation-report.json"), null, 200, "origin/main",
+                dir.resolve("build/mutation-report.json"), dir.resolve("build/e2e-result.json"), null, 200, "origin/main",
                 dir.resolve("build/llm-usage.json"), dir.resolve("build/review-history.json"),
                 dir.resolve("build/review-stats.md"), phase);
     }

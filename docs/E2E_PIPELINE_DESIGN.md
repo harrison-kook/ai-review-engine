@@ -1,9 +1,11 @@
 # E2E(Playwright) CI 연동 설계
 
-> 상태: **Phase A 파일럿 검증 완료(2026-10-19), Phase B(파이프라인 구현) 전.** marketplace에
-> Playwright E2E 스모크 테스트(2026-10-16 추가)를 실제로 PR마다 자동 실행하려면 무엇이
-> 필요한지 정리하고, 샌드박스 이미지에 MySQL/Redis/Playwright를 추가해 수동으로 끝까지
-> 돌려봤다(10장 참고).
+> 상태: **Phase A(2026-10-19)·Phase B(2026-10-19) 완료, Phase C(marketplace 쪽 준비) 전.**
+> marketplace에 Playwright E2E 스모크 테스트(2026-10-16 추가)를 실제로 PR마다 자동 실행하려면
+> 무엇이 필요한지 정리하고(Phase A), 샌드박스 이미지 파일럿 검증에 이어(10장) 엔진 코드
+> 자체(`.review.yml` e2e 스키마 + `ReviewPipeline`/`ReviewRunner`/PR 코멘트)까지 구현했다
+> (11장). **다만 marketplace가 아직 `e2e:` 설정을 켜지 않아서 실제 PR에서는 동작하지 않는다**
+> — Phase C(카테고리 시드, `application-ci-e2e.yaml`, `.review.yml`에 `e2e:` 추가)가 남았다.
 
 ## 1. 배경
 
@@ -89,7 +91,8 @@ e2e:
    컨테이너를 재사용하지 않는 `docker run --rm` 모델이라 크리티컬하진 않지만, 로컬 실행 시
    중요하다).
 5. 리포트 파싱: Playwright `junit` 리포터로 표준 JUnit XML을 내게 하면(marketplace의
-   `playwright.config.ts`에 `reporter: [['junit', {outputFile: '.ai-review-engine/playwright-junit.xml'}]]`
+   `playwright.config.ts`에 `reporter: [['junit', {outputFile: '.ai-review-engine/e2e-junit.xml'}]]`
+   (파일명은 구현체 `E2eRunner`의 고정 경로를 따른다 — 11장 참고)
    추가) **기존 `JUnitReportParser`를 그대로 재사용**할 수 있다 — 새 파서가 필요 없다.
 6. 결과는 `TestResult`와 분리된 별도 모델(`E2eResult` 등, source="e2e")로 둔다 — 단위 테스트와
    섞이면 "왜 테스트가 100개에서 갑자기 4개 늘었지" 같은 혼란을 만든다.
@@ -141,7 +144,7 @@ e2e:
 | 단계 | 내용 |
 |---|---|
 | A | 샌드박스 이미지에 MySQL+Redis+Playwright 추가, marketplace 하나로 **수동** `docker run` 파일럿 검증(워크플로 연동 전) — **완료(10장)** |
-| B | `.review.yml` e2e 스키마 + `ReviewPipeline` e2e 단계 구현, PR 코멘트에 결과만 노출(게이트는 끔) |
+| B | `.review.yml` e2e 스키마 + `ReviewPipeline` e2e 단계 구현, PR 코멘트에 결과만 노출(게이트는 끔) — **완료(11장)** |
 | C | marketplace에 카테고리 Flyway 시드 추가, `application-ci-e2e.yaml` 정리(10장에서 발견한 `spring.docker.compose.enabled=false` 포함) |
 | D | 안정화 확인 후 `gate.e2e_fail_on_any` 전환 여부 결정 |
 
@@ -202,3 +205,68 @@ DNS) 결과와 매칭되면서 실제 유저보다 먼저 선택돼버리는, My
   스크립트 — `.review.yml`의 `e2e.services` 항목 하나로 그대로 옮길 수 있는 형태다.
 - `--spring.docker.compose.enabled=false`는 marketplace의 `application-ci-e2e.yaml`(Phase C)에
   기본 포함.
+
+## 11. Phase B 구현 결과 (2026-10-19)
+
+엔진 코드에 E2E 실행을 실제로 구현했다. 설계(5장)에서 정한 방향을 그대로 따랐다 —
+`StackAdapter`를 확장하지 않고 build 단계에 별도로 끼워 넣었다.
+
+### 11.1 추가/변경된 파일
+
+- `core/config/E2eConfig.java` (신규) — `.review.yml`의 `e2e:` 섹션. `enabled`가 false면 완전히
+  스킵(lint()와 같은 원칙).
+- `core/pipeline/E2eResult.java` (신규) — `TestResult`와 의도적으로 분리. `envFailureReason`으로
+  "서비스가 안 떴음"과 "테스트가 실패함"을 구분한다.
+- `core/e2e/E2eRunner.java` (신규) — 서비스 기동(백그라운드 프로세스) → healthcheck 폴링 →
+  `test_command` 실행(`ProcessExecutor` 재사용) → JUnit XML 파싱 → `finally`에서 항상 프로세스
+  정리.
+- `core/config/Gate.java` — `e2eFailOnAny` 필드 추가(기본 false, Phase B 방침대로 "경고만").
+- `core/config/ReviewConfig.java`/`ReviewConfigLoader.java` — `e2e` 필드 + YAML 파싱 추가.
+- `core/pipeline/ReviewPipeline.java` — `runBuildPhase()`가 e2e를 실행하고
+  `build/e2e-result.json`에 쓴다.
+- `ReviewRunner.java` — REPORT/ALL에서 결과를 읽어 `MarkdownReportWriter`/`PrCommentRenderer`에
+  넘기고, `gate.e2e_fail_on_any`가 켜져 있을 때만 전체 게이트에 반영한다.
+- `renderer/markdown/MarkdownReportWriter.java`, `renderer/prcomment/PrCommentRenderer.java` —
+  E2E 섹션 추가. `PrCommentRenderer`는 생성자를 오버로드해서(`E2eResult` 없는 기존 1-arg 버전은
+  `E2eResult.DISABLED`로 위임) 기존 호출부를 안 건드렸다.
+
+### 11.2 설계와 다르게 간 것 하나 — JUnit 파서 재사용 안 함
+
+5장에서는 "기존 `JUnitReportParser`를 그대로 재사용"하려 했는데, 그 클래스가
+`stack.gradlespring` 패키지(구현 패키지)에 있어서 그대로 가져오면
+`ArchitectureTest.core_does_not_depend_on_implementation_packages`(core는 구현 패키지에
+의존하면 안 된다)를 깬다. `core.e2e.E2eRunner`에 거의 같은 파싱 로직을 독립적으로 다시
+구현했다 — JUnit5/Gradle 전용 보정(메서드명 끝 `()` 제거)은 Playwright 출력에 안 맞아서 빼고
+가져왔다. 작은 중복이지만 이 레포의 기존 관례(EsLintReportParser/JestJsonReportParser도 각자
+`relativize`를 따로 들고 있음)와 일치한다.
+
+### 11.3 기존 불변식을 깰 뻔한 지점
+
+`runBuildPhase()`는 원래 **`.review.yml`이 아예 없어도 성공해야 한다**는 불변식이 있다
+(`buildPhaseNeverTouchesRulepackOrLlm` 테스트가 명시적으로 검증 — "시크릿/룰팩 불필요" 원칙).
+E2E 설정도 결국 `.review.yml`에서 읽어야 해서 처음엔 무조건 `configLoader.load(...)`를
+호출했다가 이 테스트들을 깼다. 설정 로드를 try/catch로 감싸 실패하면 `E2eConfig.DISABLED`로
+폴백하도록 고쳐서(`loadE2eConfigOnly`), 기존 불변식을 유지한 채 e2e만 선택적으로 켜지게
+했다 — `ReviewRunner.loadGateOnly()`가 TESTRUN 단독 실행에서 이미 쓰던 것과 같은 방어
+패턴이다.
+
+### 11.4 검증
+
+- 단위 테스트 10여 개 추가(`E2eConfig`/`Gate` 파싱, `E2eRunner` 오케스트레이션 3종 — 비활성/
+  환경 실패/정상 실행, `MarkdownReportWriter`/`PrCommentRenderer` E2E 섹션 렌더링). 전체
+  스위트 157건 통과.
+- **실제 빌드한 jar로 CLI 엔드투엔드 확인**: `package.json` + `e2e.enabled: true`(서비스 없이
+  `test_command`만)인 최소 픽스처 레포에 `--phase=build`를 직접 실행해서 `build/e2e-result.json`이
+  기대한 그대로(`{"enabled":true,"success":true,...}`) 쓰이는 것, 콘솔에 `e2e: 0/0 통과`가
+  찍히는 것까지 확인했다 — 유닛 테스트의 모킹을 거치지 않은 실제 배선 검증이다.
+
+### 11.5 Phase C에서 바로 해야 할 것
+
+- marketplace `.review.yml`에 `e2e:` 섹션 추가(4장 예시 그대로, healthcheck timeout은 8장
+  갱신대로 180~240초).
+- marketplace `frontend/playwright.config.ts`에 `reporter: [['junit', {outputFile:
+  '.ai-review-engine/e2e-junit.xml'}], ...]` 추가(파일명이 `e2e-junit.xml`인 것에 주의 —
+  10장 설계 당시 적었던 `playwright-junit.xml`에서 구현 중 이름이 바뀌었다).
+- marketplace `application-ci-e2e.yaml`: `spring.docker.compose.enabled=false` 포함, DB/Redis는
+  `127.0.0.1`.
+- 카테고리 등 최소 시드를 Flyway 마이그레이션으로 고정(7장에서 이미 지적한 전제조건).

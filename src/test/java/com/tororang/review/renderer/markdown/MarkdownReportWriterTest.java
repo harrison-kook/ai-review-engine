@@ -1,5 +1,6 @@
 package com.tororang.review.renderer.markdown;
 
+import com.tororang.review.core.config.E2eConfig;
 import com.tororang.review.core.config.Gate;
 import com.tororang.review.core.config.Limits;
 import com.tororang.review.core.config.Overrides;
@@ -10,7 +11,9 @@ import com.tororang.review.core.model.Severity;
 import com.tororang.review.core.model.Source;
 import com.tororang.review.core.adapter.RuleFeedbackSummary;
 import com.tororang.review.core.pipeline.CoverageDelta;
+import com.tororang.review.core.pipeline.E2eResult;
 import com.tororang.review.core.pipeline.TestCaseReport;
+import com.tororang.review.core.stack.TestCaseResult;
 import com.tororang.review.core.renderer.ReviewReport;
 import com.tororang.review.core.stack.CoverageReport;
 import com.tororang.review.core.stack.MutationReport;
@@ -30,7 +33,7 @@ class MarkdownReportWriterTest {
 
     private ReviewConfig config(Gate gate) {
         return new ReviewConfig("org/repo@v0.1.0", List.of("common"), ReviewMode.FULL,
-                List.of(), List.of(), Overrides.EMPTY, Limits.EMPTY, gate);
+                List.of(), List.of(), Overrides.EMPTY, Limits.EMPTY, gate, E2eConfig.DISABLED);
     }
 
     @Test
@@ -49,7 +52,7 @@ class MarkdownReportWriterTest {
         );
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, testCaseReports, null, null, output);
+        writer.write(reviewReport, testCaseReports, null, null, E2eResult.DISABLED, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("# 코드 리뷰 리포트");
@@ -68,7 +71,7 @@ class MarkdownReportWriterTest {
         ReviewReport reviewReport = new ReviewReport(List.of(), config(Gate.DISABLED));
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, List.of(), null, null, output);
+        writer.write(reviewReport, List.of(), null, null, E2eResult.DISABLED, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("지적 사항 없음");
@@ -77,11 +80,11 @@ class MarkdownReportWriterTest {
 
     @Test
     void writesCoverageDeltaSectionWithGateStatus(@TempDir Path dir) throws IOException {
-        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, 10.0, null)));
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, 10.0, null, false)));
         CoverageDelta delta = CoverageDelta.of(new CoverageReport(40.0, 40, 60), new CoverageReport(55.0, 55, 45));
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, List.of(), delta, null, output);
+        writer.write(reviewReport, List.of(), delta, null, E2eResult.DISABLED, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("40.00%").contains("55.00%").contains("+15.00pp");
@@ -90,11 +93,11 @@ class MarkdownReportWriterTest {
 
     @Test
     void marksCoverageGateAsFailedWhenDeltaBelowThreshold(@TempDir Path dir) throws IOException {
-        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, 20.0, null)));
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, 20.0, null, false)));
         CoverageDelta delta = CoverageDelta.of(new CoverageReport(40.0, 40, 60), new CoverageReport(45.0, 45, 55));
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, List.of(), delta, null, output);
+        writer.write(reviewReport, List.of(), delta, null, E2eResult.DISABLED, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("min_coverage_delta: 20.00").contains("**FAIL**");
@@ -102,11 +105,11 @@ class MarkdownReportWriterTest {
 
     @Test
     void writesMutationSectionWithGateStatus(@TempDir Path dir) throws IOException {
-        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, 70.0)));
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, 70.0, false)));
         MutationReport mutationReport = new MutationReport(66.66, 3, 2);
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, List.of(), null, mutationReport, output);
+        writer.write(reviewReport, List.of(), null, mutationReport, E2eResult.DISABLED, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("66.66%").contains("2/3 killed");
@@ -115,14 +118,71 @@ class MarkdownReportWriterTest {
 
     @Test
     void marksMutationGateAsPassedWhenScoreMeetsThreshold(@TempDir Path dir) throws IOException {
-        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, 50.0)));
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, 50.0, false)));
         MutationReport mutationReport = new MutationReport(66.66, 3, 2);
 
         Path output = dir.resolve("review-report.md");
-        writer.write(reviewReport, List.of(), null, mutationReport, output);
+        writer.write(reviewReport, List.of(), null, mutationReport, E2eResult.DISABLED, output);
 
         String content = Files.readString(output);
         assertThat(content).contains("min_mutation_score: 50.00").contains("PASS");
+    }
+
+    @Test
+    void writesE2eSectionWithPassingAndFailingCases(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(Gate.DISABLED));
+        E2eResult e2eResult = new E2eResult(true, false, 2, 1, List.of(
+                new TestCaseResult("product-variant-pricing.spec.ts", "대→중→소 정렬", true, null),
+                new TestCaseResult("seller-product-lifecycle.spec.ts", "판매 시작", false, "price mismatch")
+        ), null, "playwright output");
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), null, null, e2eResult, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("## E2E");
+        assertThat(content).contains("1/2 통과");
+        assertThat(content).contains("판매 시작").contains("price mismatch").contains("FAILED");
+        assertThat(content).doesNotContain("Gate(`e2e_fail_on_any");
+    }
+
+    @Test
+    void marksE2eGateAsFailedWhenConfiguredAndATestFails(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(new Gate(null, null, null, true)));
+        E2eResult e2eResult = new E2eResult(true, false, 2, 1, List.of(
+                new TestCaseResult("a.spec.ts", "case a", true, null),
+                new TestCaseResult("b.spec.ts", "case b", false, "boom")
+        ), null, "playwright output");
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), null, null, e2eResult, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("Gate(`e2e_fail_on_any: true`): **FAIL**");
+    }
+
+    @Test
+    void writesE2eSectionAsEnvFailureWhenServiceNeverBecomesHealthy(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(Gate.DISABLED));
+        E2eResult e2eResult = new E2eResult(true, false, 0, 0, List.of(),
+                "service 'backend' did not become healthy within 200s", null);
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), null, null, e2eResult, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("환경 오류").contains("did not become healthy");
+    }
+
+    @Test
+    void writesE2eSectionAsDisabledWhenNotConfigured(@TempDir Path dir) throws IOException {
+        ReviewReport reviewReport = new ReviewReport(List.of(), config(Gate.DISABLED));
+
+        Path output = dir.resolve("review-report.md");
+        writer.write(reviewReport, List.of(), null, null, E2eResult.DISABLED, output);
+
+        String content = Files.readString(output);
+        assertThat(content).contains("E2E는 `.review.yml`의");
     }
 
     @Test

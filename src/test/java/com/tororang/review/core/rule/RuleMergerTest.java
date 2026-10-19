@@ -1,5 +1,6 @@
 package com.tororang.review.core.rule;
 
+import com.tororang.review.core.config.E2eConfig;
 import com.tororang.review.core.config.Gate;
 import com.tororang.review.core.config.Limits;
 import com.tororang.review.core.config.Overrides;
@@ -38,7 +39,8 @@ class RuleMergerTest {
                 List.of(),
                 new Overrides(List.of("STYLE-010"), Map.of("JPA-003", Severity.MEDIUM)),
                 Limits.EMPTY,
-                Gate.DISABLED
+                Gate.DISABLED,
+                E2eConfig.DISABLED
         );
 
         List<RuleDefinition> merged = merger.merge(rulepackDir, repoRoot, config);
@@ -76,7 +78,8 @@ class RuleMergerTest {
                 List.of(),
                 Overrides.EMPTY,
                 Limits.EMPTY,
-                Gate.DISABLED
+                Gate.DISABLED,
+                E2eConfig.DISABLED
         );
 
         List<RuleDefinition> merged = merger.merge(rulepackDir, repoRoot, config);

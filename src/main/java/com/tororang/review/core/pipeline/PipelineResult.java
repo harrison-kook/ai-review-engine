@@ -13,7 +13,8 @@ public record PipelineResult(
         ReviewReport reviewReport,
         List<TestCaseReport> testCaseReports,
         CoverageDelta coverageDelta,
-        MutationReport mutationReport
+        MutationReport mutationReport,
+        E2eResult e2eResult
 ) {
 
     public PipelineResult {

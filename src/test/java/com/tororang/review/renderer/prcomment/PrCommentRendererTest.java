@@ -1,6 +1,7 @@
 package com.tororang.review.renderer.prcomment;
 
 import com.tororang.review.core.adapter.PrCommentPublisher;
+import com.tororang.review.core.config.E2eConfig;
 import com.tororang.review.core.config.Gate;
 import com.tororang.review.core.config.Limits;
 import com.tororang.review.core.config.Overrides;
@@ -9,6 +10,7 @@ import com.tororang.review.core.config.ReviewMode;
 import com.tororang.review.core.model.Finding;
 import com.tororang.review.core.model.Severity;
 import com.tororang.review.core.model.Source;
+import com.tororang.review.core.pipeline.E2eResult;
 import com.tororang.review.core.renderer.RenderContext;
 import com.tororang.review.core.renderer.ReviewReport;
 import org.junit.jupiter.api.Test;
@@ -28,7 +30,7 @@ class PrCommentRendererTest {
 
     private ReviewConfig config(Gate gate) {
         return new ReviewConfig("org/repo@v0.1.0", List.of("common"), ReviewMode.DIFF,
-                List.of(), List.of(), Overrides.EMPTY, Limits.EMPTY, gate);
+                List.of(), List.of(), Overrides.EMPTY, Limits.EMPTY, gate, E2eConfig.DISABLED);
     }
 
     private static class FakePublisher implements PrCommentPublisher {
@@ -103,5 +105,49 @@ class PrCommentRendererTest {
         new PrCommentRenderer(publisher).render(report, RenderContext.EMPTY);
 
         assertThat(publisher.summaryBody).contains("PASS");
+    }
+
+    @Test
+    void summaryOmitsE2eSectionWhenNotConfigured() {
+        FakePublisher publisher = new FakePublisher(Set.of());
+        ReviewReport report = new ReviewReport(List.of(), config(Gate.DISABLED));
+
+        new PrCommentRenderer(publisher, E2eResult.DISABLED).render(report, RenderContext.EMPTY);
+
+        assertThat(publisher.summaryBody).doesNotContain("E2E");
+    }
+
+    @Test
+    void summaryReportsE2ePassCount() {
+        FakePublisher publisher = new FakePublisher(Set.of());
+        ReviewReport report = new ReviewReport(List.of(), config(Gate.DISABLED));
+        E2eResult e2eResult = new E2eResult(true, true, 4, 0, List.of(), null, "ok");
+
+        new PrCommentRenderer(publisher, e2eResult).render(report, RenderContext.EMPTY);
+
+        assertThat(publisher.summaryBody).contains("E2E: 4/4 통과").doesNotContain("FAIL");
+    }
+
+    @Test
+    void summaryReportsE2eEnvFailureSeparatelyFromTestFailures() {
+        FakePublisher publisher = new FakePublisher(Set.of());
+        ReviewReport report = new ReviewReport(List.of(), config(Gate.DISABLED));
+        E2eResult e2eResult = new E2eResult(true, false, 0, 0, List.of(),
+                "service 'backend' did not become healthy within 200s", null);
+
+        new PrCommentRenderer(publisher, e2eResult).render(report, RenderContext.EMPTY);
+
+        assertThat(publisher.summaryBody).contains("환경 오류로 실행되지 못함").contains("did not become healthy");
+    }
+
+    @Test
+    void summaryReportsE2eGateFailureWhenConfigured() {
+        FakePublisher publisher = new FakePublisher(Set.of());
+        ReviewReport report = new ReviewReport(List.of(), config(new Gate(null, null, null, true)));
+        E2eResult e2eResult = new E2eResult(true, false, 2, 1, List.of(), null, "output");
+
+        new PrCommentRenderer(publisher, e2eResult).render(report, RenderContext.EMPTY);
+
+        assertThat(publisher.summaryBody).contains("E2E Gate(`e2e_fail_on_any: true`): **FAIL**");
     }
 }
