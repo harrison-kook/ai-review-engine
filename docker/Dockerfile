@@ -9,6 +9,12 @@
 #      `docker run --network none`, 시크릿 없음.
 #   2) report 단계: 룰팩 주입 + LLM 리뷰 + PR 코멘트. 네트워크/시크릿 필요하지만 대상 레포 코드를
 #      실행하지 않는다 (Read/Grep/Glob 전용 도구로만 접근).
+#
+# mysql-server/redis-server/playwright 브라우저는 E2E 파일럿(docs/E2E_PIPELINE_DESIGN.md
+# Phase A)용이다 — `--network none`은 컨테이너 "밖"과의 통신만 막으므로, DB/브라우저를 대상
+# 레포 코드와 같은 컨테이너 안 프로세스로 띄우면 네트워크 격리를 유지한 채 E2E를 돌릴 수 있다.
+# 브라우저 바이너리는 빌드 시점(네트워크 허용)에 미리 받아둬야 한다 — 네트워크 차단 단계에서는
+# 받을 수 없다.
 
 FROM eclipse-temurin:21-jdk
 
@@ -18,7 +24,10 @@ RUN apt-get update \
        curl \
        nodejs \
        npm \
-    && npm install -g @anthropic-ai/claude-code \
+       mysql-server \
+       redis-server \
+    && npm install -g @anthropic-ai/claude-code playwright \
+    && npx --yes playwright install --with-deps chromium \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

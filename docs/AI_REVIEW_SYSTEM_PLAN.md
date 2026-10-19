@@ -405,15 +405,20 @@ SARIF 출력은 GitHub Code Scanning 탭에 업로드할 수 있어 범용성이
   StackAdapter만 쓰지 않고, `detect()`가 true인 어댑터를 전부 돌려 build/lint/test/coverage/
   mutation 결과를 합산한다. Maven 등 다른 JVM 빌드 도구는 여전히 미지원 — 그 스택을 쓰는
   파일럿 레포가 생기면 같은 방식으로 착수한다.
-- **E2E(Playwright) 실행 — 설계만 완료 (2026-10-16), 구현 전.** marketplace에 실제 화면을
-  띄워서 클릭해보는 Playwright 스모크 테스트가 생겼는데, CI 샌드박스가 `--network none`으로
-  도는 것과 DB/백엔드/프런트/브라우저를 동시에 기동해야 하는 것 사이의 절충이 필요해 별도
-  설계 문서(`docs/E2E_PIPELINE_DESIGN.md`)로 분리했다. 핵심 아이디어: 네트워크 격리는
-  "컨테이너 밖"만 막으므로 DB/백엔드/프런트를 전부 같은 컨테이너 안 프로세스로 띄우면 격리를
-  유지한 채 가능하다. `StackAdapter`를 확장하지 않고 `ReviewPipeline`에 별도 단계로 추가하며,
-  lint/test와 달리 "무엇을 어떻게 기동하는지" 보편적 관례가 없어 `.review.yml`에 명시적
-  opt-in 설정이 필요하다. 단계별 도입(샌드박스 이미지 확장 → 파이프라인 단계 → 대상 레포
-  시드 정리 → 게이트 전환) 순서도 문서에 정리해뒀다.
+- **E2E(Playwright) 실행 — 설계 완료(2026-10-16) + Phase A 파일럿 검증 완료(2026-10-19),
+  파이프라인 구현(Phase B) 전.** marketplace에 실제 화면을 띄워서 클릭해보는 Playwright
+  스모크 테스트가 생겼는데, CI 샌드박스가 `--network none`으로 도는 것과 DB/백엔드/프런트/
+  브라우저를 동시에 기동해야 하는 것 사이의 절충이 필요해 별도 설계 문서
+  (`docs/E2E_PIPELINE_DESIGN.md`)로 분리했다. 핵심 아이디어: 네트워크 격리는 "컨테이너 밖"만
+  막으므로 DB/백엔드/프런트를 전부 같은 컨테이너 안 프로세스로 띄우면 격리를 유지한 채
+  가능하다 — Phase A에서 실제로 `docker/Dockerfile`에 MySQL/Redis/Playwright를 추가하고
+  `--network none` 컨테이너 안에서 marketplace 백엔드를 끝까지 기동시켜 증명했다(콜드 스타트
+  약 130초, 이미지 +4GB대). 과정에서 MariaDB가 Hibernate 7.x의 Dialect 자동판별과 호환 안
+  되는 문제, MySQL 익명유저가 신규 유저를 가리는 문제, Spring Boot의 docker-compose
+  자동지원이 기동을 막는 문제 세 가지를 만나 전부 해결·기록해뒀다(설계 문서 10장).
+  `StackAdapter`를 확장하지 않고 `ReviewPipeline`에 별도 단계로 추가하며, lint/test와 달리
+  "무엇을 어떻게 기동하는지" 보편적 관례가 없어 `.review.yml`에 명시적 opt-in 설정이
+  필요하다.
 - **대시보드** — **보류.** "필요 시"라는 조건부 항목이고 지금은 대시보드를 볼 사용자가 없다.
   PR을 넘어선 추이 분석이 필요해지는 시점에 다시 착수한다.
 
