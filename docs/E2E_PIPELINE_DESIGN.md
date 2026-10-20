@@ -1,11 +1,10 @@
 # E2E(Playwright) CI 연동 설계
 
-> 상태: **Phase A(2026-10-19)·Phase B(2026-10-19) 완료, Phase C(marketplace 쪽 준비) 전.**
-> marketplace에 Playwright E2E 스모크 테스트(2026-10-16 추가)를 실제로 PR마다 자동 실행하려면
-> 무엇이 필요한지 정리하고(Phase A), 샌드박스 이미지 파일럿 검증에 이어(10장) 엔진 코드
-> 자체(`.review.yml` e2e 스키마 + `ReviewPipeline`/`ReviewRunner`/PR 코멘트)까지 구현했다
-> (11장). **다만 marketplace가 아직 `e2e:` 설정을 켜지 않아서 실제 PR에서는 동작하지 않는다**
-> — Phase C(카테고리 시드, `application-ci-e2e.yaml`, `.review.yml`에 `e2e:` 추가)가 남았다.
+> 상태: **Phase A·B·C 코드는 전부 완료(2026-10-19), 실제 PR 파일럿은 아직.** 샌드박스 이미지
+> 파일럿 검증(Phase A, 10장) → 엔진 코드 구현(Phase B, 11장) → marketplace 쪽 설정(Phase C,
+> 12장)까지 끝냈다. `.review.yml`에 `e2e:`가 켜져 있고 필요한 스크립트/프로파일도 다
+> 커밋됐다. **다만 실제 GitHub Actions PR로 전체 파이프라인을 끝까지 돌려본 적은 아직
+> 없다**(12.3) — 로컬/CLI 검증과 실제 러너 사이에 남아 있는 리스크(8장)가 거기서 드러난다.
 
 ## 1. 배경
 
@@ -270,3 +269,50 @@ E2E 설정도 결국 `.review.yml`에서 읽어야 해서 처음엔 무조건 `c
 - marketplace `application-ci-e2e.yaml`: `spring.docker.compose.enabled=false` 포함, DB/Redis는
   `127.0.0.1`.
 - 카테고리 등 최소 시드를 Flyway 마이그레이션으로 고정(7장에서 이미 지적한 전제조건).
+
+## 12. Phase C 구현 결과 (2026-10-19, marketplace 레포)
+
+marketplace 쪽 준비물을 전부 추가했다. 7장/11.5에서 적은 계획과 한 군데 다르게 갔다 —
+**카테고리 시드를 Flyway 마이그레이션으로 넣지 않았다.** 마이그레이션은 로컬/dev/운영 DB에
+전부 똑같이 적용되므로, 테스트용 카테고리를 거기 넣으면 운영 DB까지 오염된다. 대신
+`frontend/e2e/global-setup.ts`가 카테고리가 하나도 없을 때만(= CI의 깨끗한 DB) ADMIN 권한으로
+하나 만들어 두도록 했다(`ensureLeafCategoryExists`) — 로컬 개발 DB처럼 이미 카테고리가 있으면
+아무것도 안 한다.
+
+### 12.1 추가/변경된 파일 (marketplace)
+
+- `.review.yml` — `e2e:` 섹션 추가. `backend` 서비스는 `working_directory: "."`로 레포 루트를
+  가리키게 명시적으로 오버라이드했다(최상위 `e2e.working_directory: frontend`가 기본값이라,
+  안 그러면 백엔드도 `frontend/`에서 기동하려 든다).
+- `scripts/ci-e2e-backend.sh` (신규) — MySQL(`mysqld_safe --skip-name-resolve`, 10.2 함정
+  그대로 적용) → DB/유저 생성 → Redis → `gradlew bootRun`을 한 스크립트로 묶었다. `.review.yml`
+  에서 `sh scripts/ci-e2e-backend.sh`로 호출한다(실행 비트에 의존하지 않도록 `sh`를 명시).
+- `src/main/resources/application-ci-e2e.yaml` (신규) — DB/Redis `127.0.0.1`,
+  `spring.docker.compose.enabled=false`(10.3 함정), 토스 결제위젯 클라이언트 키는 토스
+  공개 데모 키(시크릿 아님 — build 단계는 애초에 시크릿을 안 받으므로 이것만 쓸 수 있다).
+  `pg.provider`는 `application.yaml` 기본값(mock)을 그대로 쓴다.
+- `frontend/playwright.config.ts` — `process.env.CI`일 때만 `junit` 리포터를 추가해
+  `.ai-review-engine/e2e-junit.xml`을 낸다(로컬 실행은 그대로 html+list).
+- `frontend/e2e/fixtures/api.ts`/`global-setup.ts` — `ensureLeafCategoryExists` 추가(위 참고).
+- `.gitattributes` — `*.sh text eol=lf` 추가(Windows에서 커밋해도 CRLF로 안 바뀌게, `gradlew`와
+  같은 이유).
+
+### 12.2 검증
+
+- `ai-review-engine`의 `ReviewConfigLoader`로 marketplace의 실제 `.review.yml`을 직접
+  파싱해서 기대한 구조(서비스 2개, `working_directory` 오버라이드, 타임아웃 값 등)와 정확히
+  일치하는 것을 확인했다(임시 테스트로 확인 후 삭제 — 커밋 안 함).
+- `scripts/ci-e2e-backend.sh`는 Phase A 파일럿에서 이미 실제로 돌려본 스크립트와 로직이
+  같다(마리아DB 대신 MySQL, `--skip-name-resolve`, `docker-compose` 자동지원 끄기까지 전부
+  10장에서 검증된 내용 그대로 옮긴 것) — 다만 `.review.yml`을 통한 전체 파이프라인 자체를
+  실제 GitHub Actions PR로 끝까지 돌려보지는 않았다(다음 항목).
+
+### 12.3 아직 안 한 것 — 실제 PR 파일럿
+
+이 레포 쪽 설정은 다 됐지만, **실제로 PR을 열어서 전체 파이프라인이 끝까지 성공하는지는 아직
+확인 전이다.** 이게 Phase A/B/C 전부를 통틀어 처음으로 "진짜 GitHub Actions 러너 + 네트워크
+차단 + 폴리글랏 런타임"이 전부 합쳐지는 지점이라, 로컬/CLI 검증과 달리 터질 수 있는 지점이
+여럿 남아 있다(예: GitHub Actions 러너의 디스크/메모리 제약, 이미지 pull 시간, Playwright
+버전과 엔진 이미지에 미리 구워둔 Chromium 리비전이 어긋나는 문제 — 8장에 적어둔 미결
+사항). `gate.e2e_fail_on_any`는 계속 꺼둔 채로, 테스트 PR을 하나 열어서 실제로 관찰하는 게
+다음 단계다.
